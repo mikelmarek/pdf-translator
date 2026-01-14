@@ -19,10 +19,11 @@
       "dest": "api/[...path].ts"
     },
     {
-      "handle": "filesystem"
+      "src": "/(.*\\..*)",
+      "dest": "client/dist/$1"
     },
     {
-      "src": "/.*",
+      "src": "/(.*)",
       "dest": "client/dist/index.html"
     }
   ]
