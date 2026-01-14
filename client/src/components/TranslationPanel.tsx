@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { jsPDF } from 'jspdf';
 import { TranslationService, TranslationEvent } from '../services/translationService';
 
 interface TranslationPanelProps {

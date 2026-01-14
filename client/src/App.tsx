@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { PDFViewer } from './components/PDFViewer';
 import { TranslationPanel } from './components/TranslationPanel';
 import { Login } from './components/Login';
@@ -7,7 +7,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageText, setPageText] = useState<string>('');
   const [targetLanguage, setTargetLanguage] = useState<string>('czech');
-  const [totalPages, setTotalPages] = useState<number>(0);
+  const [, setTotalPages] = useState<number>(0);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
   // Check authentication on load
