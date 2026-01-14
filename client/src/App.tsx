@@ -1,16 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { PDFViewer } from './components/PDFViewer';
 import { TranslationPanel } from './components/TranslationPanel';
 import { Login } from './components/Login';
 import './App.css';
 
+import type { PDFViewerHandle } from './components/PDFViewer';
+
 function App() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageText, setPageText] = useState<string>('');
   const [targetLanguage, setTargetLanguage] = useState<string>('czech');
-  const [, setTotalPages] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(0);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [, setUsername] = useState<string>('');
+
+  const pdfViewerRef = useRef<PDFViewerHandle | null>(null);
+
+  const extractPagesText = useMemo(() => {
+    return async (fromPage: number, toPage: number) => {
+      return (await pdfViewerRef.current?.extractPagesText(fromPage, toPage)) ?? [];
+    };
+  }, []);
 
   // Check authentication on load
   useEffect(() => {
@@ -95,6 +105,7 @@ function App() {
       <div className="app-content">
         <div className="pdf-panel">
           <PDFViewer 
+            ref={pdfViewerRef}
             currentPage={currentPage}
             onPageChange={handlePageChange}
             onPageCountChange={handlePageCountChange}
@@ -105,8 +116,10 @@ function App() {
           <TranslationPanel 
             pageText={pageText}
             currentPage={currentPage}
+            totalPages={totalPages}
             targetLanguage={targetLanguage}
             onLanguageChange={handleLanguageChange}
+            extractPagesText={extractPagesText}
           />
         </div>
       </div>

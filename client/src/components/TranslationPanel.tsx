@@ -4,20 +4,28 @@ import { TranslationService, TranslationEvent } from '../services/translationSer
 interface TranslationPanelProps {
   pageText: string;
   currentPage: number;
+  totalPages: number;
   targetLanguage: string;
   onLanguageChange: (language: string) => void;
+  extractPagesText: (fromPage: number, toPage: number) => Promise<Array<{ pageNumber: number; pageText: string }>>;
 }
 
 export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   pageText,
   currentPage,
+  totalPages,
   targetLanguage,
   onLanguageChange,
+  extractPagesText,
 }) => {
   const [translatedText, setTranslatedText] = useState<string>('');
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [lastTranslatedPage, setLastTranslatedPage] = useState<number>(0);
+  const [rangeFrom, setRangeFrom] = useState<number>(1);
+  const [rangeTo, setRangeTo] = useState<number>(1);
+  const [bulkStatus, setBulkStatus] = useState<string>('');
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const translationService = TranslationService.getInstance();
 
   // Available languages for translation
@@ -103,6 +111,20 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     // This saves money by not auto-translating unwanted pages
     console.log('📄 Page changed to:', currentPage, 'but NOT auto-translating');
   }, [pageText, currentPage]);
+
+  // Keep default range aligned with loaded PDF / current page
+  useEffect(() => {
+    if (totalPages > 0) {
+      setRangeFrom((prev) => (prev >= 1 && prev <= totalPages ? prev : 1));
+      setRangeTo((prev) => (prev >= 1 && prev <= totalPages ? prev : Math.min(totalPages, Math.max(1, currentPage))));
+    }
+  }, [totalPages]);
+
+  useEffect(() => {
+    if (totalPages > 0) {
+      setRangeTo((prev) => (prev >= 1 && prev <= totalPages ? prev : currentPage));
+    }
+  }, [currentPage, totalPages]);
 
   // Effect to retranslate when language changes  
   useEffect(() => {
@@ -309,6 +331,171 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       .trim();
   };
 
+  const exportRangeToPdf = (pages: Array<{ pageNumber: number; translatedText: string }>) => {
+    const formatTextAsHTML = (text: string) => {
+      const prettyText = reflowTranslatedText(text);
+      return prettyText
+        .split('\n')
+        .map((line) => {
+          const trimmedLine = line.trim();
+          const isBullet = trimmedLine.startsWith('•');
+          const isNumberedBullet = /^\d+\.\s/.test(trimmedLine);
+          const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine);
+          const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine);
+
+          if (!trimmedLine) return '<div class="empty-line">&nbsp;</div>';
+          if (isBullet || isNumberedBullet) return `<div class="bullet-line">${line}</div>`;
+          if (isMainHeading) return `<div class="heading-line">${line}</div>`;
+          if (isSubHeading) return `<div class="sub-heading-line">${line}</div>`;
+          return `<div class="text-line">${line}</div>`;
+        })
+        .join('\n');
+    };
+
+    const pagesHtml = pages
+      .map((p, idx) => {
+        const content = formatTextAsHTML(p.translatedText);
+        const pageBreakClass = idx === 0 ? 'page' : 'page page-break';
+        return `
+<div class="${pageBreakClass}">
+  <div class="header">
+    <div class="title">Překlad stránky ${p.pageNumber}</div>
+    <div class="date">Datum: ${new Date().toLocaleDateString('cs-CZ')}</div>
+  </div>
+  <div class="content">
+    ${content}
+  </div>
+</div>`;
+      })
+      .join('\n');
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Překlad PDF (strany ${pages[0]?.pageNumber ?? ''}–${pages[pages.length - 1]?.pageNumber ?? ''})</title>
+  <style>
+    @media print {
+      body { margin: 0; }
+      .no-print { display: none; }
+      .page-break { page-break-before: always; break-before: page; }
+    }
+    body {
+      font-family: 'Times New Roman', 'DejaVu Serif', serif;
+      font-size: 12pt;
+      line-height: 1.75;
+      margin: 2cm;
+      color: #000;
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .header {
+      border-bottom: 2px solid #3b82f6;
+      padding-bottom: 15pt;
+      margin-bottom: 25pt;
+    }
+    .title {
+      font-size: 18pt;
+      font-weight: bold;
+      margin-bottom: 8pt;
+      color: #1e40af;
+    }
+    .date {
+      font-size: 11pt;
+      color: #64748b;
+    }
+    .text-line { margin-bottom: 6pt; }
+    .bullet-line {
+      padding-left: 1.5em;
+      text-indent: -1em;
+      margin-bottom: 6pt;
+    }
+    .heading-line {
+      font-weight: 700;
+      font-size: 14pt;
+      color: #1e40af;
+      margin: 20pt 0 12pt 0;
+      border-bottom: 1px solid #e1e9f0;
+      padding-bottom: 4pt;
+    }
+    .sub-heading-line {
+      font-weight: 600;
+      font-size: 13pt;
+      color: #2563eb;
+      margin: 15pt 0 8pt 0;
+    }
+    .empty-line { margin: 8pt 0; }
+  </style>
+</head>
+<body>
+  ${pagesHtml}
+  <button class="no-print" onclick="window.print()" style="position: fixed; top: 10px; right: 10px; padding: 15px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">📄 Tisknout do PDF</button>
+</body>
+</html>`;
+
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const printWindow = window.open(url, '_blank');
+    if (printWindow) {
+      printWindow.onload = () => {
+        setTimeout(() => {
+          printWindow.print();
+        }, 250);
+      };
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const translateRangeAndSave = async () => {
+    if (isTranslating) return;
+    if (!totalPages || totalPages <= 0) {
+      setError('Nejdřív nahraj PDF (aby šel zvolit rozsah).');
+      return;
+    }
+
+    const from = Math.max(1, Math.min(rangeFrom, rangeTo));
+    const to = Math.min(totalPages, Math.max(rangeFrom, rangeTo));
+    const count = to - from + 1;
+
+    const ok = window.confirm(
+      `Přeložit strany ${from}–${to} (${count} stran) a uložit do PDF?\n\nMůže to trvat několik minut podle délky textu a rychlosti API.`
+    );
+    if (!ok) return;
+
+    setError('');
+    setIsTranslating(true);
+    setBulkStatus('Načítám texty stránek…');
+    setBulkProgress({ current: 0, total: count });
+
+    try {
+      const pages = await extractPagesText(from, to);
+      const translations: Array<{ pageNumber: number; translatedText: string }> = [];
+
+      for (let i = 0; i < pages.length; i += 1) {
+        const p = pages[i];
+        setBulkStatus(`Překládám stránku ${p.pageNumber} (${i + 1}/${pages.length})…`);
+        setBulkProgress({ current: i + 1, total: pages.length });
+
+        const translated = await translationService.translateToString(p.pageText, targetLanguage, false);
+        translations.push({ pageNumber: p.pageNumber, translatedText: translated });
+
+        // malé zpomalení kvůli limitům / stabilitě
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      setBulkStatus('Hotovo. Otevírám tisk do PDF…');
+      exportRangeToPdf(translations);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Chyba při překladu rozsahu');
+    } finally {
+      setBulkStatus('');
+      setBulkProgress(null);
+      setIsTranslating(false);
+    }
+  };
+
   return (
     <>
       <div className="panel-header">
@@ -341,6 +528,49 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       </div>
 
       <div className="panel-content">
+        <details style={{ marginBottom: '12px' }}>
+          <summary style={{ cursor: 'pointer' }}>
+            Pokročilé: přeložit rozsah stránek → PDF
+          </summary>
+          <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+            <span style={{ color: '#666', fontSize: '0.9rem' }}>Od–do</span>
+            <input
+              type="number"
+              min={1}
+              max={Math.max(1, totalPages || 1)}
+              value={rangeFrom}
+              onChange={(e) => setRangeFrom(Number(e.target.value || 1))}
+              style={{ width: '70px', padding: '6px' }}
+              disabled={!totalPages || isTranslating}
+            />
+            <input
+              type="number"
+              min={1}
+              max={Math.max(1, totalPages || 1)}
+              value={rangeTo}
+              onChange={(e) => setRangeTo(Number(e.target.value || 1))}
+              style={{ width: '70px', padding: '6px' }}
+              disabled={!totalPages || isTranslating}
+            />
+            <button
+              onClick={translateRangeAndSave}
+              disabled={!totalPages || isTranslating}
+              title="Přeloží vybraný rozsah stránek postupně a otevře tisk do PDF"
+            >
+              Přeložit rozsah → PDF
+            </button>
+            <span style={{ color: '#666', fontSize: '0.9rem' }}>
+              Může to trvat několik minut.
+            </span>
+          </div>
+        </details>
+        {bulkStatus && (
+          <div className="translation-loading">
+            {bulkStatus}
+            {bulkProgress ? ` (${bulkProgress.current}/${bulkProgress.total})` : ''}
+          </div>
+        )}
+
         {error && (
           <div className="translation-error">
             {error}

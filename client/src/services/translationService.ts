@@ -119,6 +119,28 @@ export class TranslationService {
     }
   }
 
+  // Convenience helper: returns the full translated text as a single string.
+  async translateToString(pageText: string, targetLanguage: string, force: boolean = false): Promise<string> {
+    let acc = '';
+    return new Promise<string>((resolve, reject) => {
+      void this.translateWithStream(
+        pageText,
+        targetLanguage,
+        (event) => {
+          if (event.error) {
+            reject(new Error(event.error));
+            return;
+          }
+          if (event.content) acc += event.content;
+          if (event.isDone) resolve(acc);
+        },
+        (err) => reject(err),
+        undefined,
+        force
+      );
+    });
+  }
+
   // Check backend health
   async checkHealth(): Promise<boolean> {
     try {
