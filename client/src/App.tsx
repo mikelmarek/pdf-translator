@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { PDFViewer } from './components/PDFViewer';
 import { TranslationPanel } from './components/TranslationPanel';
 import { Login } from './components/Login';
+import './App.css';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -66,12 +67,14 @@ function App() {
           />
         </div>
         
-        <TranslationPanel 
-          pageText={pageText}
-          currentPage={currentPage}
-          targetLanguage={targetLanguage}
-          onLanguageChange={handleLanguageChange}
-        />
+        <div className="translation-panel">
+          <TranslationPanel 
+            pageText={pageText}
+            currentPage={currentPage}
+            targetLanguage={targetLanguage}
+            onLanguageChange={handleLanguageChange}
+          />
+        </div>
       </div>
     </div>
   );

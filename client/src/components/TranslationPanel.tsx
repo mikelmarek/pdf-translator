@@ -190,8 +190,61 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     onLanguageChange(event.target.value);
   };
 
+  const reflowTranslatedText = (text: string) => {
+    const rawLines = text
+      .replace(/\r/g, '')
+      .split('\n')
+      .map(l => l.trimEnd()); // necháme leading spaces řešit přes CSS třídami
+
+    const out: string[] = [];
+    let buffer = '';
+
+    const flush = () => {
+      if (buffer.trim()) out.push(buffer.trim());
+      buffer = '';
+    };
+
+    const isMainHeading = (l: string) => /^\d+\s+\S/.test(l) && !/^\d+\.\s/.test(l);      // "0 Úvod"
+    const isSubHeading  = (l: string) => /^\d+\.\d+(\.\d+)?\s+\S/.test(l);               // "0.1 ..."
+    const isBulletDot   = (l: string) => l.trim().startsWith('•');
+    const isBulletNum   = (l: string) => /^\d+\.\s+\S/.test(l);                          // "1. ..."
+    const isPageMeta    = (l: string) => /Strana\s+\d+\s+z\s+\d+/i.test(l) || /\d{4}-\d{2}-\d{2}/.test(l);
+
+    // řádky, které musí zůstat samostatně
+    const mustStayAlone = (l: string) =>
+      !l.trim() ||
+      isMainHeading(l) ||
+      isSubHeading(l) ||
+      isBulletDot(l) ||
+      isBulletNum(l) ||
+      isPageMeta(l);
+
+    for (const line of rawLines) {
+      const l = line.trim();
+
+      if (mustStayAlone(l)) {
+        flush();
+        // prázdný řádek zachovej jako separator
+        out.push(l);
+        continue;
+      }
+
+      // jinak: je to normální text => připoj do bufferu
+      if (!buffer) buffer = l;
+      else buffer += ' ' + l;
+    }
+
+    flush();
+
+    // zredukuj vícenásobné prázdné řádky
+    return out
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  };
+
   return (
-    <div className="translation-panel">
+    <>
       <div className="panel-header">
         <h3>Překlad stránky {currentPage}</h3>
         <select 
@@ -236,7 +289,45 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
         {translatedText && (
           <div className="translation-content">
-            {translatedText}
+            {(() => {
+              const prettyText = reflowTranslatedText(translatedText);
+              return prettyText.split('\n').map((line, i, allLines) => {
+                const trimmedLine = line.trim();
+                
+                // Identify line type
+                const isBullet = trimmedLine.startsWith('•');
+                const isNumberedBullet = /^\d+\.\s/.test(trimmedLine); // 1. 2. 3. jsou také odrážky
+                const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine); // 0 Úvod (bez tečky)
+                const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine); // 0.1, 0.2.1 apod.
+                
+                // Check if previous line was a bullet and this continues it (simplified)
+                const isPreviousBullet = i > 0 && (
+                  /^\d+\.\s/.test(allLines[i-1].trim()) || 
+                  allLines[i-1].trim().startsWith('•')
+                );
+                
+                const isContinuation =
+                  isPreviousBullet &&
+                  trimmedLine.length > 0 &&
+                  !isBullet &&
+                  !isNumberedBullet &&
+                  !isMainHeading &&
+                  !isSubHeading;
+                
+                // Determine CSS class
+                let className = 'text-line';
+                if (isBullet || isNumberedBullet) className = 'bullet-line';
+                else if (isContinuation) className = 'bullet-continuation';
+                else if (isSubHeading) className = 'sub-heading-line';
+                else if (isMainHeading) className = 'heading-line';
+                
+                return (
+                  <div key={i} className={className}>
+                    {line || '\u00A0'} {/* Non-breaking space for empty lines */}
+                  </div>
+                );
+              });
+            })()}
             {isTranslating && (
               <span style={{ animation: 'blink 1s infinite' }}>▋</span>
             )}
@@ -249,6 +340,6 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 };

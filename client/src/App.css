@@ -1,56 +1,40 @@
-/* Global reset */
+/* Základní reset */
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
-}
-
-html, body {
-  width: 100%;
-  height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
   margin: 0;
   padding: 0;
 }
 
-#root {
-  width: 100%;
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   height: 100vh;
+  margin: 0;
+  background: linear-gradient(135deg, #f8fafc 0%, #e8f3f9 100%);
 }
 
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
-}
-
+/* Hlavní aplikace */
 .app {
-  width: 100%;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f8f9fa;
-  min-height: 100vh;
+  background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
 }
 
+/* Horní panel s nadpisem */
 .app-header {
-  background: white;
-  border-bottom: 2px solid #dee2e6;
+  background: rgba(255, 255, 255, 0.95);
+  border-bottom: 2px solid #e1e9f0;
   padding: 1rem 2rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  width: 100%;
-  flex-shrink: 0;
+  height: 70px;
+  backdrop-filter: blur(10px);
 }
 
 .app-header h1 {
-  margin: 0;
-  color: #007bff;
+  color: #3b82f6;
   font-size: 1.5rem;
-  font-weight: 600;
 }
 
 .logout-button {
@@ -60,99 +44,85 @@ html, body {
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.9rem;
 }
 
-.logout-button:hover {
-  background: #c82333;
-}
-
+/* HLAVNÍ OBSAH - DVA PANELY VEDLE SEBE */
 .app-content {
   flex: 1;
   display: flex;
+  gap: 12px;
+  padding: 12px;
   min-height: 0;
-  width: 100%;
 }
 
-.pdf-panel {
-  flex: 1;
-  border-right: 2px solid #dee2e6;
-  background: white;
-  display: flex;
-  flex-direction: column;
-}
-
+/* PANELY - VEDLE SEBE */
+.pdf-panel,
 .translation-panel {
   flex: 1;
-  background: white;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #e1e9f0;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
 }
 
+/* Hlavičky panelů */
 .panel-header {
-  background: #f8f9fa;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f7ff 100%);
   padding: 1rem;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid #e1e9f0;
   display: flex;
-  align-items: center;
   gap: 1rem;
-  flex-wrap: wrap;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  align-items: center;
+  height: 70px;
 }
 
 .panel-header h3 {
-  margin: 0;
-  color: #495057;
+  color: #333;
   font-size: 1.1rem;
-  font-weight: 600;
 }
 
 .panel-header button {
-  padding: 0.5rem 1rem !important;
-  border: 1px solid #007bff !important;
-  background: #007bff !important;
-  color: white !important;
-  border-radius: 4px !important;
-  cursor: pointer !important;
-  font-size: 0.9rem !important;
-  transition: all 0.2s ease !important;
-  appearance: none !important;
-  -webkit-appearance: none !important;
-  font-family: inherit !important;
-}
-
-.panel-header button:hover:not(:disabled) {
-  background: #0056b3 !important;
-  border-color: #0056b3 !important;
+  padding: 0.5rem 1rem;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 .panel-header button:disabled {
-  background: #6c757d !important;
-  border-color: #6c757d !important;
-  cursor: not-allowed !important;
-  opacity: 0.6 !important;
+  background: #ccc;
+  cursor: not-allowed;
 }
 
 .panel-header .save-button {
-  background: #28a745 !important;
-  border-color: #28a745 !important;
-  margin-left: 0.5rem;
+  background: #28a745;
 }
 
-.panel-header .save-button:hover:not(:disabled) {
-  background: #218838 !important;
-  border-color: #218838 !important;
+.language-select {
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
 }
 
+.page-info {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+/* Obsah panelů */
 .panel-content {
   flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem;
-  line-height: 1.6;
   min-height: 0;
+  padding: 1rem;
+  overflow: auto;
 }
 
+/* PDF viewer */
 .pdf-viewer {
   display: flex;
   flex-direction: column;
@@ -163,75 +133,252 @@ html, body {
   display: flex;
   justify-content: center;
   align-items: center;
-  flex: 1;
-  padding: 1rem;
 }
 
 .pdf-viewer canvas {
   max-width: 100%;
   max-height: 100%;
-  border: 1px solid #dee2e6;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  background: white;
+  border: 1px solid #ccc;
 }
 
+/* Překlad */
 .translation-content {
-  font-family: 'Georgia', 'Times New Roman', serif;
-  font-size: 14px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  color: #212529;
+  white-space: normal; /* changed from pre-wrap since we handle lines manually */
+  line-height: 1.75;
+  font-size: 15px;
+  padding: 1rem;
+  flex: 1;
+  overflow-y: auto;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #2d3748;
+  
+  /* Knížkový layout pro lepší čitelnost */
+  max-width: 900px;
+  margin: 0 auto;
+  
+  /* Zachování struktury dokumentu */
+  text-align: left;
   word-wrap: break-word;
-  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+/* normální odstavec */
+.translation-content .text-line {
+  margin-bottom: 0.4rem;
+}
+
+/* odrážka */
+.translation-content .bullet-line {
+  padding-left: 1.5em;   /* TAB doprava */
+  text-indent: -1em;     /* • vyskočí doleva */
+  margin-bottom: 0.4rem;
+}
+
+/* pokračování odrážky na dalším řádku */
+.translation-content .bullet-continuation {
+  padding-left: 1.5em;   /* stejné odsazení jako odrážka */
+  margin-bottom: 0.4rem;
+}
+
+/* hlavní nadpis (0, 1, 2...) */
+.translation-content .heading-line {
+  font-weight: 700;
+  font-size: 1.2em;
+  color: #1e40af;
+  margin: 1.5rem 0 0.8rem 0;
+  border-bottom: 1px solid #e1e9f0;
+  padding-bottom: 0.3rem;
+}
+
+/* podnadpis (0.1, 0.2, 1.1...) */
+.translation-content .sub-heading-line {
+  font-weight: 600;
+  font-size: 1.1em;
+  color: #2563eb;
+  margin: 1rem 0 0.6rem 0;
+}
+
+/* Formátování odstavců a seznamů */
+.translation-content p {
+  margin-bottom: 1rem;
+  text-indent: 0;
+}
+
+.translation-content h1,
+.translation-content h2,
+.translation-content h3,
+.translation-content h4 {
+  margin: 1.5rem 0 1rem 0;
+  font-weight: 600;
+  color: #1a365d;
+  line-height: 1.4;
+}
+
+.translation-content h1 {
+  font-size: 1.4rem;
+  border-bottom: 2px solid #e1e9f0;
+  padding-bottom: 0.5rem;
+}
+
+.translation-content h2 {
+  font-size: 1.2rem;
+}
+
+.translation-content h3 {
+  font-size: 1.1rem;
+}
+
+/* Číslované a odrážkové seznamy */
+.translation-content ul,
+.translation-content ol {
+  margin: 1rem 0;
+  padding-left: 2rem;
+}
+
+.translation-content li {
+  margin-bottom: 0.5rem;
+  line-height: 1.5;
+}
+
+/* Zvýraznění čísel a speciálních sekcí */
+.translation-content strong {
+  font-weight: 600;
+  color: #2b6cb0;
+}
+
+/* Zachování původního formátování */
+.translation-content code {
+  background: #f7fafc;
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+}
+
+/* Markdown-like formatting pro překlady */
+.translation-content {
+  /* Automatické rozpoznání tučného textu */
+}
+
+.translation-content :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 700;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  color: #1e40af;
+}
+
+/* Zvýraznění čísel kapitol a sekcí */
+.translation-content :is(h1, h2, h3):first-child {
+  margin-top: 0;
+}
+
+/* Lepší rozestup pro číslované seznamy */
+.translation-content ol {
+  counter-reset: item;
+}
+
+.translation-content ol > li {
+  display: block;
+  margin-bottom: 0.8rem;
+}
+
+.translation-content ol > li:before {
+  content: counter(item) ". ";
+  counter-increment: item;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+/* Styling pro odrážky */
+.translation-content ul > li:before {
+  content: "• ";
+  color: #3b82f6;
+  font-weight: bold;
+  margin-right: 0.5rem;
+}
+
+.translation-content ul > li {
+  list-style: none;
+}
+
+/* Zvláštní formátování pro stránky a čísla */
+.translation-content [class*="page"],
+.translation-content [class*="strana"] {
+  font-size: 0.9rem;
+  color: #64748b;
+  font-style: italic;
 }
 
 .translation-loading {
-  color: #6c757d;
+  color: #666;
   font-style: italic;
   text-align: center;
   padding: 2rem;
-  background: #f8f9fa;
-  border-radius: 8px;
-  border: 2px dashed #dee2e6;
 }
 
 .translation-error {
   color: #dc3545;
   background: #f8d7da;
-  border: 1px solid #f5c6cb;
   padding: 1rem;
-  border-radius: 6px;
+  border-radius: 4px;
+}
+
+/* Login */
+.login-container {
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #f8f9fa;
+}
+
+.login-form {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  max-width: 400px;
+  width: 100%;
+}
+
+.login-form h2 {
+  text-align: center;
+  color: #007bff;
+  margin-bottom: 1.5rem;
+}
+
+.login-form input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
   margin-bottom: 1rem;
 }
 
-.language-select {
-  padding: 0.5rem;
-  border: 1px solid #ced4da;
+.login-form button {
+  width: 100%;
+  padding: 0.75rem;
+  background: #007bff;
+  color: white;
+  border: none;
   border-radius: 4px;
-  background: white;
-  font-size: 0.9rem;
-  min-width: 120px;
   cursor: pointer;
 }
 
-.language-select:focus {
-  border-color: #007bff;
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+.login-error {
+  color: #dc3545;
+  text-align: center;
+  margin-top: 1rem;
 }
 
-.page-info {
-  font-size: 0.9rem;
-  color: #6c757d;
-  font-weight: 500;
-  background: #e9ecef;
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
+/* Animace */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
-/* Loading animation for text cursor */
-.translation-content span[style*="animation"] {
+.cursor-blink::after {
+  content: '|';
+  animation: blink 1s infinite;
   color: #007bff;
-  font-weight: bold;
 }

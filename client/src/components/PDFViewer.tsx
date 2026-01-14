@@ -41,6 +41,40 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   };
 
+  // Clean page text (fallback textual filters for edge cases)
+  const cleanPageText = (rawText: string): string => {
+    const lines = rawText.split('\n');
+
+    const cleaned = lines.filter(line => {
+      const l = line.trim();
+
+      // prázdné řádky nech
+      if (!l) return true;
+
+      // FALLBACK textové filtry pro extrémní případy
+      // (většinu už vyřeší geometrické filtrování)
+      
+      // Copyright - všude může být problematické
+      if (/©/.test(l)) return false;
+      
+      // Stránkování + verze + datum (backup filtry)
+      if (/Strana\s+\d+\s+z\s+\d+/i.test(l)) return false;
+      if (/v\d+\.\d+\s+Strana/i.test(l)) return false;
+      if (/\d{4}-\d{2}-\d{2}/.test(l)) return false;
+
+      return true;
+    });
+
+    return cleaned.join('\n');
+  };
+
+  // Normalize text by removing trademark symbols and extra spaces
+  const normalizeText = (text: string): string =>
+    text
+      .replace(/[®©]/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
   // Render specific page
   const renderPage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumber: number) => {
     try {
@@ -70,21 +104,82 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         viewport: scaledViewport,
       }).promise;
 
-      // Extract text content from the page
+      // Extract text content from the page (preserve layout/line breaks)
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item) => {
-          if ('str' in item) {
-            return item.str;
-          }
-          return '';
-        })
-        .join(' ')
-        .replace(/\s+/g, ' ') // Normalize whitespace
-        .trim();
+      
+      // Get page dimensions for geometric header/footer detection
+      const baseViewport = page.getViewport({ scale: 1 });
+      const pageHeight = baseViewport.height;
+
+      // Define header/footer zones (percentages of page height)
+      const headerZone = pageHeight * 0.10; // 10% nahoře
+      const footerZone = pageHeight * 0.08; // 8% dole
+      const skipHeaderFooter = pageNumber > 1; // Skip only from 2nd page onwards
+
+      type AnyItem = any;
+      const items = textContent.items as AnyItem[];
+
+      const lines: string[] = [];
+      let currentLine = '';
+      let lastY: number | null = null;
+
+      // tolerance for "same line" (pdf.js coords can be floaty)
+      const sameLineTolerance = 2;
+
+      for (const it of items) {
+        if (!it || typeof it.str !== 'string') continue;
+
+        const y = Array.isArray(it.transform) ? it.transform[5] : null;
+
+        // Geometric header/footer detection
+        if (typeof y === 'number' && skipHeaderFooter) {
+          // y=0 bývá dole, y=height nahoře (PDF coords)
+          const isHeader = y > (pageHeight - headerZone);
+          const isFooter = y < footerZone;
+          
+          // Optional: only skip small text in header/footer zones
+          const fontSizeApprox = Math.abs(it.transform?.[0] ?? 0);
+          const isSmallText = fontSizeApprox < 14;
+
+          if ((isHeader || isFooter) && isSmallText) continue; // 🔥 vyhodit hlavičku/patičku
+        }
+
+        // If y changes enough => new line
+        if (lastY !== null && typeof y === 'number' && Math.abs(y - lastY) > sameLineTolerance) {
+          if (currentLine.trim()) lines.push(currentLine.trim());
+          currentLine = '';
+        }
+
+        // Append token
+        currentLine += it.str;
+
+        // Add a space if token doesn't end with punctuation/hyphen (optional)
+        currentLine += ' ';
+
+        // Some pdf.js versions provide hasEOL -> enforce line break
+        if (it.hasEOL) {
+          if (currentLine.trim()) lines.push(currentLine.trim());
+          currentLine = '';
+          lastY = null;
+          continue;
+        }
+
+        if (typeof y === 'number') lastY = y;
+      }
+
+      if (currentLine.trim()) lines.push(currentLine.trim());
+
+      // Final: keep newlines (do NOT normalize to one line)
+      const pageText = lines
+        .map(l => l.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .join('\n');
+
+      // Clean text from headers, footers, copyright, metadata
+      const cleanedText = normalizeText(cleanPageText(pageText));
 
       // Notify parent component about page change
-      onPageChange(pageNumber, pageText);
+      onPageChange(pageNumber, cleanedText);
     } catch (error) {
       console.error('Error rendering page:', error);
     }
