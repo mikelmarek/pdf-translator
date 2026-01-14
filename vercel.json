@@ -10,10 +10,7 @@
     },
     {
       "src": "server/src/index.ts",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["server/src/**"]
-      }
+      "use": "@vercel/node"
     }
   ],
   "routes": [
@@ -24,16 +21,6 @@
     {
       "src": "/(.*)",
       "dest": "client/dist/$1"
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "server/src/index.ts"
-    },
-    {
-      "source": "/((?!api).*)",
-      "destination": "/index.html"
     }
   ]
 }
