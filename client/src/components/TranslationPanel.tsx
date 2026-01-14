@@ -253,7 +253,11 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   };
 
   const reflowTranslatedText = (text: string) => {
-    const rawLines = text
+    // Normalize inline bullet markers that often come in the middle of a sentence.
+    // Example: "... způsobem: ● K2: ... ● K3: ..." -> split into separate bullet lines.
+    const normalized = text.replace(/\s*●\s*/g, '\n• ');
+
+    const rawLines = normalized
       .replace(/\r/g, '')
       .split('\n')
       .map(l => l.trimEnd()); // necháme leading spaces řešit přes CSS třídami
