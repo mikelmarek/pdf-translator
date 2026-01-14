@@ -10,7 +10,7 @@ function App() {
   const [targetLanguage, setTargetLanguage] = useState<string>('czech');
   const [, setTotalPages] = useState<number>(0);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [username, setUsername] = useState<string>('');
+  const [, setUsername] = useState<string>('');
 
   // Check authentication on load
   useEffect(() => {
