@@ -579,7 +579,13 @@ app.delete('/api/cache', (req: Request, res: Response) => {
   res.json({ message: 'Cache cleared successfully' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`OpenAI API key configured: ${!!process.env.OPENAI_API_KEY}`);
-});
+// When deployed as a Vercel Serverless Function, Vercel handles the HTTP server.
+// Only listen on a port when running this file directly (local/dev or node dist).
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`OpenAI API key configured: ${!!process.env.OPENAI_API_KEY}`);
+  });
+}
+
+export default app;
