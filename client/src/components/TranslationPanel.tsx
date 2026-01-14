@@ -24,6 +24,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const [lastTranslatedPage, setLastTranslatedPage] = useState<number>(0);
   const [rangeFrom, setRangeFrom] = useState<number>(1);
   const [rangeTo, setRangeTo] = useState<number>(1);
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [bulkStatus, setBulkStatus] = useState<string>('');
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const translationService = TranslationService.getInstance();
@@ -525,45 +526,63 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         >
           💾 Uložit
         </button>
+
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          disabled={isTranslating}
+          className="advanced-toggle-button"
+          title="Rozsah stránek → PDF"
+          aria-label="Pokročilé: rozsah stránek do PDF"
+        >
+          ⚙️
+        </button>
       </div>
 
       <div className="panel-content">
-        <details style={{ marginBottom: '12px' }}>
-          <summary style={{ cursor: 'pointer' }}>
-            Pokročilé: přeložit rozsah stránek → PDF
-          </summary>
-          <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-            <span style={{ color: '#666', fontSize: '0.9rem' }}>Od–do</span>
-            <input
-              type="number"
-              min={1}
-              max={Math.max(1, totalPages || 1)}
-              value={rangeFrom}
-              onChange={(e) => setRangeFrom(Number(e.target.value || 1))}
-              style={{ width: '70px', padding: '6px' }}
-              disabled={!totalPages || isTranslating}
-            />
-            <input
-              type="number"
-              min={1}
-              max={Math.max(1, totalPages || 1)}
-              value={rangeTo}
-              onChange={(e) => setRangeTo(Number(e.target.value || 1))}
-              style={{ width: '70px', padding: '6px' }}
-              disabled={!totalPages || isTranslating}
-            />
-            <button
-              onClick={translateRangeAndSave}
-              disabled={!totalPages || isTranslating}
-              title="Přeloží vybraný rozsah stránek postupně a otevře tisk do PDF"
-            >
-              Přeložit rozsah → PDF
-            </button>
-            <span style={{ color: '#666', fontSize: '0.9rem' }}>
-              Může to trvat několik minut.
-            </span>
+        {showAdvanced && (
+          <div
+            style={{
+              marginBottom: '12px',
+              border: '1px solid #ddd',
+              borderRadius: '6px',
+              padding: '10px',
+              background: '#fafafa',
+            }}
+          >
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+              <span style={{ color: '#666', fontSize: '0.9rem' }}>Přeložit rozsah stránek → PDF</span>
+              <span style={{ color: '#666', fontSize: '0.9rem' }}>Od–do</span>
+              <input
+                type="number"
+                min={1}
+                max={Math.max(1, totalPages || 1)}
+                value={rangeFrom}
+                onChange={(e) => setRangeFrom(Number(e.target.value || 1))}
+                style={{ width: '70px', padding: '6px' }}
+                disabled={!totalPages || isTranslating}
+              />
+              <input
+                type="number"
+                min={1}
+                max={Math.max(1, totalPages || 1)}
+                value={rangeTo}
+                onChange={(e) => setRangeTo(Number(e.target.value || 1))}
+                style={{ width: '70px', padding: '6px' }}
+                disabled={!totalPages || isTranslating}
+              />
+              <button
+                onClick={translateRangeAndSave}
+                disabled={!totalPages || isTranslating}
+                title="Přeloží vybraný rozsah stránek postupně a otevře tisk do PDF"
+                className="range-pdf-button"
+              >
+                Přeložit → PDF
+              </button>
+              <span style={{ color: '#666', fontSize: '0.9rem' }}>Může to trvat několik minut.</span>
+            </div>
           </div>
-        </details>
+        )}
         {bulkStatus && (
           <div className="translation-loading">
             {bulkStatus}

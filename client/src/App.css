@@ -103,6 +103,42 @@ body {
   background: #28a745;
 }
 
+.panel-header .advanced-toggle-button {
+  width: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 123, 255, 0.15);
+  color: #007bff;
+  border: 1px solid rgba(0, 123, 255, 0.35);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.panel-header .advanced-toggle-button:disabled {
+  background: #eee;
+  color: #888;
+  border: 1px solid #ddd;
+}
+
+.range-pdf-button {
+  padding: 0.5rem 1rem;
+  background: rgba(0, 123, 255, 0.15);
+  color: #007bff;
+  border: 1px solid rgba(0, 123, 255, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.range-pdf-button:disabled {
+  background: #eee;
+  color: #888;
+  border: 1px solid #ddd;
+  cursor: not-allowed;
+}
+
 .language-select {
   padding: 0.5rem;
   border: 1px solid #ccc;
