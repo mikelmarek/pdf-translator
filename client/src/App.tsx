@@ -84,12 +84,11 @@ function App() {
   return (
     <div className="app">
       <div className="app-header">
-        <h1>🤖 PDF Překladač</h1>
+        <h1>PDF Překladač</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ color: '#64748b', fontSize: '0.9rem' }}>{username}</span>
-        <button onClick={handleLogout} className="logout-button">
-          Odhlásit se
-        </button>
+          <button onClick={handleLogout} className="logout-button">
+            Odhlásit se
+          </button>
         </div>
       </div>
       

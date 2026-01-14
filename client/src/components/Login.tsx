@@ -45,6 +45,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       }
 
       if (!loginData.token) throw new Error('Chybí token ze serveru');
+      // clear sensitive inputs ASAP
+      setOpenaiApiKey('');
+      setPassword('');
       onLogin(loginData.token, loginData.username || cleanUsername);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nastala chyba');
@@ -109,9 +112,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </button>
         </form>
         
-        <div className="login-footer">
-          <p>🤖 AI-powered PDF Translation</p>
-        </div>
       </div>
     </div>
   );
