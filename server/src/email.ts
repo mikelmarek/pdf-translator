@@ -1,0 +1,77 @@
+import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
+import type { Request } from 'express';
+
+function envBool(value: string | undefined, defaultValue: boolean): boolean {
+  if (value == null || value.trim() === '') return defaultValue;
+  const v = value.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'y';
+}
+
+function getTransporter(): Transporter | null {
+  const host = process.env.SMTP_HOST;
+  const portRaw = process.env.SMTP_PORT;
+  const user = process.env.SMTP_USER;
+  const passRaw = process.env.SMTP_PASS;
+
+  if (!host || !portRaw || !user || !passRaw) return null;
+
+  // App passwords are often copied with spaces (e.g. Gmail). Normalize.
+  const pass = passRaw.replace(/\s+/g, '');
+
+  const port = Number(portRaw);
+  if (!Number.isFinite(port) || port <= 0) return null;
+
+  const secure = envBool(process.env.SMTP_SECURE, port === 465);
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+  });
+}
+
+function detectSource(req: Request): string {
+  if (process.env.VERCEL) return 'vercel';
+  const host = req.headers.host || '';
+  if (typeof host === 'string' && host.includes('localhost')) return 'localhost';
+  return 'server';
+}
+
+export async function sendLoginEmail(params: {
+  username: string;
+  req: Request;
+}): Promise<void> {
+  const transporter = getTransporter();
+  if (!transporter) return;
+
+  const to = process.env.LOGIN_NOTIFY_TO || 'mikelmarek.work@gmail.com';
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@localhost';
+
+  const ip = (params.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+    || params.req.socket.remoteAddress
+    || 'unknown';
+  const ua = params.req.headers['user-agent'] || 'unknown';
+  const when = new Date().toISOString();
+  const source = detectSource(params.req);
+
+  const subject = `Login: ${params.username} (${source}) ${when}`;
+  const text = [
+    `Login detected`,
+    ``,
+    `Username: ${params.username}`,
+    `Source: ${source}`,
+    `Host: ${params.req.headers.host || 'unknown'}`,
+    `Time: ${when}`,
+    `IP: ${ip}`,
+    `User-Agent: ${ua}`,
+  ].join('\n');
+
+  await transporter.sendMail({
+    to,
+    from,
+    subject,
+    text,
+  });
+}
