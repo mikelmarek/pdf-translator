@@ -368,9 +368,18 @@ app.post('/api/auth/login', rateLimitOrNext({ name: 'auth-login', limit: 10, win
       const result = await trySendLoginEmail({ username: cleanUsername, req });
       let emailQueued = true;
       let emailError: unknown | undefined;
-      if (!result.ok) {
+      let emailMessageId: string | undefined;
+      let emailAccepted: string[] | undefined;
+      let emailRejected: string[] | undefined;
+      let emailResponse: string | undefined;
+      if ('error' in result) {
         emailQueued = result.error.message !== 'SMTP not configured';
         emailError = result.error;
+      } else {
+        emailMessageId = result.messageId;
+        emailAccepted = result.accepted;
+        emailRejected = result.rejected;
+        emailResponse = result.response;
       }
       return res.json({
         token,
@@ -380,6 +389,10 @@ app.post('/api/auth/login', rateLimitOrNext({ name: 'auth-login', limit: 10, win
         emailOk: result.ok,
         emailSource: result.source,
         emailError,
+        emailMessageId,
+        emailAccepted,
+        emailRejected,
+        emailResponse,
       });
     }
 

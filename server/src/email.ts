@@ -2,6 +2,12 @@ import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import type { Request } from 'express';
 
+function cleanEnv(value: string | undefined): string {
+  const v = (value ?? '').trim();
+  // Be defensive: Vercel/env UIs sometimes include quotes.
+  return v.replace(/^"|"$/g, '').replace(/^'|'$/g, '').trim();
+}
+
 function envBool(value: string | undefined, defaultValue: boolean): boolean {
   if (value == null || value.trim() === '') return defaultValue;
   const v = value.trim().toLowerCase();
@@ -9,10 +15,10 @@ function envBool(value: string | undefined, defaultValue: boolean): boolean {
 }
 
 function getTransporter(): Transporter | null {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const passRaw = process.env.SMTP_PASS;
+  const host = cleanEnv(process.env.SMTP_HOST);
+  const portRaw = cleanEnv(process.env.SMTP_PORT);
+  const user = cleanEnv(process.env.SMTP_USER);
+  const passRaw = cleanEnv(process.env.SMTP_PASS);
 
   if (!host || !portRaw || !user || !passRaw) return null;
 
@@ -40,7 +46,14 @@ function detectSource(req: Request): string {
 }
 
 type EmailSendResult =
-  | { ok: true; source: string }
+  | {
+      ok: true;
+      source: string;
+      messageId?: string;
+      accepted?: string[];
+      rejected?: string[];
+      response?: string;
+    }
   | { ok: false; source: string; error: { message?: string; code?: string; responseCode?: number; response?: string } };
 
 function buildLoginEmail(params: { username: string; req: Request }): {
@@ -50,8 +63,8 @@ function buildLoginEmail(params: { username: string; req: Request }): {
   text: string;
   source: string;
 } {
-  const to = process.env.LOGIN_NOTIFY_TO || 'mikelmarek.work@gmail.com';
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@localhost';
+  const to = cleanEnv(process.env.LOGIN_NOTIFY_TO) || 'mikelmarek.work@gmail.com';
+  const from = cleanEnv(process.env.SMTP_FROM) || cleanEnv(process.env.SMTP_USER) || 'no-reply@localhost';
 
   const ip = (params.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
     || params.req.socket.remoteAddress
@@ -83,8 +96,15 @@ export async function trySendLoginEmail(params: { username: string; req: Request
   }
 
   try {
-    await transporter.sendMail({ to, from, subject, text });
-    return { ok: true, source };
+    const info = await transporter.sendMail({ to, from, subject, text });
+    return {
+      ok: true,
+      source,
+      messageId: (info as any)?.messageId,
+      accepted: Array.isArray((info as any)?.accepted) ? (info as any).accepted : undefined,
+      rejected: Array.isArray((info as any)?.rejected) ? (info as any).rejected : undefined,
+      response: (info as any)?.response,
+    };
   } catch (e) {
     const err = e as any;
     return {
