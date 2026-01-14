@@ -13,7 +13,8 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Optional fallback OpenAI client (used only for DEMO mode / fallback)
-const serverOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// IMPORTANT: Don't instantiate OpenAI without an API key (it throws at import time on Vercel).
+const serverOpenai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 // Middleware
 app.use(
