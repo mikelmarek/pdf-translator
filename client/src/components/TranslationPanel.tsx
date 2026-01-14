@@ -122,7 +122,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     
     // Convert text to properly formatted HTML
     const formatTextAsHTML = (text: string) => {
-      return text.split('\n').map((line, i) => {
+      return text.split('\n').map((line) => {
         const trimmedLine = line.trim();
         
         // Identify line type (same logic as display)
