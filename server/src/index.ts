@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { Redis } from '@upstash/redis';
 import { Ratelimit } from '@upstash/ratelimit';
-import { sendLoginEmail } from './email';
+import { queueLoginEmail } from './email';
 
 dotenv.config();
 
@@ -363,18 +363,9 @@ app.post('/api/auth/login', rateLimitOrNext({ name: 'auth-login', limit: 10, win
       token = createStatelessToken({ username: cleanUsername, apiKeyEnc, ttlSeconds: SESSION_TTL_SECONDS });
     }
 
-    // Best-effort login notification email (does not affect login)
-    void sendLoginEmail({ username: cleanUsername, req }).catch((e) => {
-      const err = e as any;
-      console.warn('Login email failed', {
-        message: err?.message,
-        code: err?.code,
-        responseCode: err?.responseCode,
-        response: err?.response,
-      });
-    });
+    const emailQueued = queueLoginEmail({ username: cleanUsername, req });
 
-    return res.json({ token, username: cleanUsername, expiresIn: SESSION_TTL_SECONDS });
+    return res.json({ token, username: cleanUsername, expiresIn: SESSION_TTL_SECONDS, emailQueued });
   } catch (e) {
     console.error('Login error', e);
     return res.status(500).json({ error: 'Login failed' });

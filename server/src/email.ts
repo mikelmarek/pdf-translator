@@ -75,3 +75,44 @@ export async function sendLoginEmail(params: {
     text,
   });
 }
+
+export function queueLoginEmail(params: { username: string; req: Request }): boolean {
+  const transporter = getTransporter();
+  if (!transporter) return false;
+
+  void (async () => {
+    const to = process.env.LOGIN_NOTIFY_TO || 'mikelmarek.work@gmail.com';
+    const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@localhost';
+
+    const ip = (params.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+      || params.req.socket.remoteAddress
+      || 'unknown';
+    const ua = params.req.headers['user-agent'] || 'unknown';
+    const when = new Date().toISOString();
+    const source = detectSource(params.req);
+
+    const subject = `Login: ${params.username} (${source}) ${when}`;
+    const text = [
+      `Login detected`,
+      ``,
+      `Username: ${params.username}`,
+      `Source: ${source}`,
+      `Host: ${params.req.headers.host || 'unknown'}`,
+      `Time: ${when}`,
+      `IP: ${ip}`,
+      `User-Agent: ${ua}`,
+    ].join('\n');
+
+    await transporter.sendMail({ to, from, subject, text });
+  })().catch((e) => {
+    const err = e as any;
+    console.warn('Login email failed', {
+      message: err?.message,
+      code: err?.code,
+      responseCode: err?.responseCode,
+      response: err?.response,
+    });
+  });
+
+  return true;
+}
