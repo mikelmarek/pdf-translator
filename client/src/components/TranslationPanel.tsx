@@ -113,9 +113,34 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     }
   }, [targetLanguage]);
 
-  // Save translated text to PDF file with proper UTF-8 encoding
+  // Save translated text to PDF file with proper formatting
   const saveTranslation = () => {
     if (!translatedText) return;
+
+    // Use the same reflow logic as display
+    const prettyText = reflowTranslatedText(translatedText);
+    
+    // Convert text to properly formatted HTML
+    const formatTextAsHTML = (text: string) => {
+      return text.split('\n').map((line, i) => {
+        const trimmedLine = line.trim();
+        
+        // Identify line type (same logic as display)
+        const isBullet = trimmedLine.startsWith('•');
+        const isNumberedBullet = /^\d+\.\s/.test(trimmedLine);
+        const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine);
+        const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine);
+        
+        // Generate HTML with appropriate classes
+        if (!trimmedLine) return '<div class="empty-line">&nbsp;</div>';
+        if (isBullet || isNumberedBullet) return `<div class="bullet-line">${line}</div>`;
+        if (isMainHeading) return `<div class="heading-line">${line}</div>`;
+        if (isSubHeading) return `<div class="sub-heading-line">${line}</div>`;
+        return `<div class="text-line">${line}</div>`;
+      }).join('\n');
+    };
+
+    const formattedContent = formatTextAsHTML(prettyText);
 
     // Create HTML for better formatting and print to PDF
     const htmlContent = `
@@ -132,28 +157,63 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         body {
             font-family: 'Times New Roman', 'DejaVu Serif', serif;
             font-size: 12pt;
-            line-height: 1.5;
+            line-height: 1.75;
             margin: 2cm;
             color: #000;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
         }
         .header {
-            border-bottom: 2px solid #007bff;
-            padding-bottom: 10pt;
-            margin-bottom: 20pt;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 15pt;
+            margin-bottom: 25pt;
         }
         .title {
-            font-size: 16pt;
+            font-size: 18pt;
             font-weight: bold;
-            margin-bottom: 5pt;
+            margin-bottom: 8pt;
+            color: #1e40af;
         }
         .date {
-            font-size: 10pt;
-            color: #666;
+            font-size: 11pt;
+            color: #64748b;
         }
         .content {
-            white-space: pre-wrap;
-            word-wrap: break-word;
+            /* Use same styling as our app */
         }
+        
+        /* Match our CSS classes for consistent formatting */
+        .text-line {
+            margin-bottom: 6pt;
+        }
+        
+        .bullet-line {
+            padding-left: 1.5em;
+            text-indent: -1em;
+            margin-bottom: 6pt;
+        }
+        
+        .heading-line {
+            font-weight: 700;
+            font-size: 14pt;
+            color: #1e40af;
+            margin: 20pt 0 12pt 0;
+            border-bottom: 1px solid #e1e9f0;
+            padding-bottom: 4pt;
+        }
+        
+        .sub-heading-line {
+            font-weight: 600;
+            font-size: 13pt;
+            color: #2563eb;
+            margin: 15pt 0 8pt 0;
+        }
+        
+        .empty-line {
+            margin: 8pt 0;
+        }
+        
         .bold { font-weight: bold; }
     </style>
 </head>
@@ -162,8 +222,10 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         <div class="title">Překlad stránky ${currentPage}</div>
         <div class="date">Datum: ${new Date().toLocaleDateString('cs-CZ')}</div>
     </div>
-    <div class="content">${translatedText.replace(/\*\*(.*?)\*\*/g, '<span class="bold">$1</span>').replace(/\n/g, '<br>')}</div>
-    <button class="no-print" onclick="window.print()" style="position: fixed; top: 10px; right: 10px; padding: 10px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">Tisknout do PDF</button>
+    <div class="content">
+        ${formattedContent}
+    </div>
+    <button class="no-print" onclick="window.print()" style="position: fixed; top: 10px; right: 10px; padding: 15px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">📄 Tisknout do PDF</button>
 </body>
 </html>`;
 
