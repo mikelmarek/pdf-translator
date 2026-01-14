@@ -110,38 +110,83 @@ interface Storage {
   countActiveSessions(): Promise<number>;
 }
 
-class MemoryStorage implements Storage {
-  private sessions = new Map<string, SessionRecord>();
+function b64urlEncode(input: Buffer | string): string {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
+  return buf
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
 
-  async setSession(token: string, username: string, apiKeyEnc: string, ttlSeconds: number): Promise<void> {
-    const expiresAt = Date.now() + ttlSeconds * 1000;
-    this.sessions.set(token, { username, apiKeyEnc, expiresAt });
+function b64urlDecodeToString(input: string): string {
+  const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4));
+  return Buffer.from(b64 + pad, 'base64').toString('utf8');
+}
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+function signStateless(payloadB64: string): string {
+  if (!APP_SECRET) throw new Error('Missing APP_SECRET. Set APP_SECRET in server environment variables.');
+  const sig = crypto.createHmac('sha256', deriveKey(APP_SECRET)).update(payloadB64, 'utf8').digest();
+  return b64urlEncode(sig);
+}
+
+function createStatelessToken(args: { username: string; apiKeyEnc: string; ttlSeconds: number }): string {
+  const exp = Math.floor(Date.now() / 1000) + args.ttlSeconds;
+  const payload = JSON.stringify({ u: args.username, k: args.apiKeyEnc, exp });
+  const payloadB64 = b64urlEncode(payload);
+  const sig = signStateless(payloadB64);
+  return `${payloadB64}.${sig}`;
+}
+
+function parseStatelessToken(token: string): { username: string; apiKeyEnc: string } | null {
+  const [payloadB64, sig] = token.split('.');
+  if (!payloadB64 || !sig) return null;
+  let expected: string;
+  try {
+    expected = signStateless(payloadB64);
+  } catch {
+    return null;
+  }
+  if (!timingSafeEqualStr(expected, sig)) return null;
+  try {
+    const raw = b64urlDecodeToString(payloadB64);
+    const parsed = JSON.parse(raw) as { u?: unknown; k?: unknown; exp?: unknown };
+    if (typeof parsed.u !== 'string' || typeof parsed.k !== 'string' || typeof parsed.exp !== 'number') return null;
+    if (parsed.exp <= Math.floor(Date.now() / 1000)) return null;
+    return { username: parsed.u, apiKeyEnc: parsed.k };
+  } catch {
+    return null;
+  }
+}
+
+class StatelessStorage implements Storage {
+  async setSession(_token: string, _username: string, _apiKeyEnc: string, _ttlSeconds: number): Promise<void> {
+    // No-op (stateless token carries the session)
   }
 
   async getSession(token: string): Promise<{ username: string; apiKeyEnc: string } | null> {
-    const rec = this.sessions.get(token);
-    if (!rec) return null;
-    if (rec.expiresAt <= Date.now()) {
-      this.sessions.delete(token);
-      return null;
-    }
-    return { username: rec.username, apiKeyEnc: rec.apiKeyEnc };
+    return parseStatelessToken(token);
   }
 
-  async deleteSession(token: string): Promise<void> {
-    this.sessions.delete(token);
+  async deleteSession(_token: string): Promise<void> {
+    // No-op (can't revoke without server-side store)
   }
 
   async pruneSessions(): Promise<void> {
-    const now = Date.now();
-    for (const [token, rec] of this.sessions.entries()) {
-      if (rec.expiresAt <= now) this.sessions.delete(token);
-    }
+    // No-op
   }
 
   async countActiveSessions(): Promise<number> {
-    await this.pruneSessions();
-    return this.sessions.size;
+    // Can't know without store; return 0 so login isn't blocked.
+    return 0;
   }
 }
 
@@ -193,7 +238,7 @@ class RedisStorage implements Storage {
 const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
 const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 const redis = upstashUrl && upstashToken ? new Redis({ url: upstashUrl, token: upstashToken }) : null;
-const storage: Storage = redis ? new RedisStorage(redis) : new MemoryStorage();
+const storage: Storage = redis ? new RedisStorage(redis) : new StatelessStorage();
 
 const rateLimiters = new Map<string, Ratelimit>();
 const memRate = new Map<string, { resetAt: number; count: number }>();
@@ -302,14 +347,20 @@ app.post('/api/auth/login', rateLimitOrNext({ name: 'auth-login', limit: 10, win
     const ok = await verifyPassword(password, configured);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const active = await storage.countActiveSessions();
-    if (active >= MAX_ACTIVE_SESSIONS) {
-      return res.status(429).json({ error: `Maximum ${MAX_ACTIVE_SESSIONS} active users already logged in` });
-    }
-
-    const token = crypto.randomBytes(32).toString('hex');
     const apiKeyEnc = encryptApiKey(openaiApiKey.trim());
-    await storage.setSession(token, cleanUsername, apiKeyEnc, SESSION_TTL_SECONDS);
+    // If Redis is available, keep server-side sessions and enforce MAX_ACTIVE_SESSIONS.
+    // Otherwise (serverless without Redis), use a stateless signed token to avoid flaky in-memory sessions.
+    let token: string;
+    if (redis) {
+      const active = await storage.countActiveSessions();
+      if (active >= MAX_ACTIVE_SESSIONS) {
+        return res.status(429).json({ error: `Maximum ${MAX_ACTIVE_SESSIONS} active users already logged in` });
+      }
+      token = crypto.randomBytes(32).toString('hex');
+      await storage.setSession(token, cleanUsername, apiKeyEnc, SESSION_TTL_SECONDS);
+    } else {
+      token = createStatelessToken({ username: cleanUsername, apiKeyEnc, ttlSeconds: SESSION_TTL_SECONDS });
+    }
 
     return res.json({ token, username: cleanUsername, expiresIn: SESSION_TTL_SECONDS });
   } catch (e) {
