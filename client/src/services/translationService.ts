@@ -32,10 +32,12 @@ export class TranslationService {
       console.log('🔄 Starting translation request...', { targetLanguage, textLength: pageText.length });
 
       // Send the translation request to backend
+      const token = localStorage.getItem('pdf-translator-token');
       const response = await fetch('/api/translate-stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ pageText, targetLanguage, force }),
       });

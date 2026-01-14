@@ -10,21 +10,53 @@ function App() {
   const [targetLanguage, setTargetLanguage] = useState<string>('czech');
   const [, setTotalPages] = useState<number>(0);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [username, setUsername] = useState<string>('');
 
   // Check authentication on load
   useEffect(() => {
-    const authToken = localStorage.getItem('pdf-translator-auth');
-    setIsAuthenticated(authToken === 'true');
+    const token = localStorage.getItem('pdf-translator-token');
+    if (!token) {
+      setIsAuthenticated(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('Not authenticated');
+        const data = await res.json();
+        setUsername(data.username || '');
+        setIsAuthenticated(true);
+      } catch {
+        localStorage.removeItem('pdf-translator-token');
+        setUsername('');
+        setIsAuthenticated(false);
+      }
+    })();
   }, []);
 
   // Handle login
-  const handleLogin = () => {
+  const handleLogin = (token: string, loggedInUsername: string) => {
+    localStorage.setItem('pdf-translator-token', token);
+    setUsername(loggedInUsername);
     setIsAuthenticated(true);
   };
 
   // Handle logout
   const handleLogout = () => {
-    localStorage.removeItem('pdf-translator-auth');
+    const token = localStorage.getItem('pdf-translator-token');
+    if (token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {
+        // ignore
+      });
+    }
+    localStorage.removeItem('pdf-translator-token');
+    setUsername('');
     setIsAuthenticated(false);
   };
 
@@ -53,9 +85,12 @@ function App() {
     <div className="app">
       <div className="app-header">
         <h1>🤖 PDF Překladač</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ color: '#64748b', fontSize: '0.9rem' }}>{username}</span>
         <button onClick={handleLogout} className="logout-button">
           Odhlásit se
         </button>
+        </div>
       </div>
       
       <div className="app-content">

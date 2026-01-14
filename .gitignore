@@ -39,3 +39,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Local docs (do not commit)
+README.md
+README_SPUSTENI.md
+README_PRIVATE.md
+
+# Documents (do not commit)
+*.pdf

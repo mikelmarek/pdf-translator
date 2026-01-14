@@ -1,25 +1,56 @@
 import React, { useState } from 'react';
 
 interface LoginProps {
-  onLogin: () => void;
+  onLogin: (token: string, username: string) => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Jednoduchá kontrola hesla
-    const correctPassword = import.meta.env.VITE_APP_PASSWORD || 'prekladac2026';
-    
-    if (password === correctPassword) {
-      localStorage.setItem('pdf-translator-auth', 'true');
-      onLogin();
-    } else {
-      setError('Nesprávné heslo');
+
+    setError('');
+    setIsLoading(true);
+
+    try {
+      const cleanUsername = username.trim().toLowerCase();
+      if (!cleanUsername) {
+        setError('Zadej uživatelské jméno');
+        return;
+      }
+      if (password.length < 6) {
+        setError('Heslo musí mít alespoň 6 znaků');
+        return;
+      }
+
+      if (!openaiApiKey.trim().startsWith('sk-')) {
+        setError('OpenAI API klíč musí začínat na sk-');
+        return;
+      }
+
+      const loginRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cleanUsername, password, openaiApiKey: openaiApiKey.trim() }),
+      });
+
+      const loginData = await loginRes.json().catch(() => ({}));
+      if (!loginRes.ok) {
+        throw new Error(loginData.error || 'Přihlášení selhalo');
+      }
+
+      if (!loginData.token) throw new Error('Chybí token ze serveru');
+      onLogin(loginData.token, loginData.username || cleanUsername);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nastala chyba');
       setPassword('');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -28,29 +59,53 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       <div className="login-form">
         <div className="login-header">
           <h1>🔒 PDF Překladač</h1>
-          <p>Zadejte heslo pro přístup k aplikaci</p>
+          <p>Přihlášení</p>
         </div>
         
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Uživatelské jméno"
+              className="password-input"
+              autoComplete="username"
+              disabled={isLoading}
+              autoFocus
+            />
+          </div>
+
+          <div className="form-group">
+            <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Zadejte heslo..."
+              placeholder="Heslo"
               className="password-input"
-              autoFocus
+              autoComplete="current-password"
+            />
+          </div>
+
+          <div className="form-group">
+            <input
+              type="password"
+              value={openaiApiKey}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              placeholder="OpenAI API klíč (sk-...)"
+              className="password-input"
+              autoComplete="off"
             />
           </div>
           
           {error && (
-            <div className="error-message">
+            <div className="login-error">
               {error}
             </div>
           )}
           
           <button type="submit" className="login-button">
-            Přihlásit se
+            {isLoading ? 'Pracuji…' : 'Přihlásit se'}
           </button>
         </form>
         

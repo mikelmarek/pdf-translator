@@ -1,21 +1,335 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
+import * as crypto from 'crypto';
+import * as bcrypt from 'bcryptjs';
+import { Redis } from '@upstash/redis';
+import { Ratelimit } from '@upstash/ratelimit';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// Optional fallback OpenAI client (used only for DEMO mode / fallback)
+const serverOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(express.json({ limit: '10mb' }));
+
+// -----------------------------
+// Auth + storage
+// -----------------------------
+
+type SessionRecord = {
+  username: string;
+  apiKeyEnc: string;
+  expiresAt: number;
+};
+
+const SESSION_TTL_SECONDS = 60 * 60 * 24; // 24h
+const MAX_ACTIVE_SESSIONS = 2;
+
+// Only these two users are allowed; no public signup.
+const AUTH_MARA_PASSWORD = process.env.AUTH_MARA_PASSWORD || '';
+const AUTH_BARU_PASSWORD = process.env.AUTH_BARU_PASSWORD || '';
+
+const APP_SECRET = process.env.APP_SECRET || '';
+
+function isBcryptHash(v: string): boolean {
+  return typeof v === 'string' && v.startsWith('$2');
+}
+
+async function verifyPassword(plain: string, configured: string): Promise<boolean> {
+  if (!configured) return false;
+  if (isBcryptHash(configured)) return bcrypt.compare(plain, configured);
+  return plain === configured;
+}
+
+function getClientIp(req: Request): string {
+  const xf = req.headers['x-forwarded-for'];
+  if (typeof xf === 'string' && xf.length > 0) return xf.split(',')[0].trim();
+  return req.ip || 'unknown';
+}
+
+function getBearerToken(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (!header) return null;
+  const [type, token] = header.split(' ');
+  if (type?.toLowerCase() !== 'bearer' || !token) return null;
+  return token.trim();
+}
+
+function deriveKey(secret: string): Buffer {
+  // 32 bytes key for AES-256
+  return crypto.createHash('sha256').update(secret, 'utf8').digest();
+}
+
+function encryptApiKey(plain: string): string {
+  if (!APP_SECRET) {
+    throw new Error('Missing APP_SECRET. Set APP_SECRET in server environment variables.');
+  }
+  const key = deriveKey(APP_SECRET);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString('base64')}.${ciphertext.toString('base64')}.${tag.toString('base64')}`;
+}
+
+function decryptApiKey(enc: string): string {
+  if (!APP_SECRET) {
+    throw new Error('Missing APP_SECRET. Set APP_SECRET in server environment variables.');
+  }
+  const [ivB64, ctB64, tagB64] = enc.split('.');
+  if (!ivB64 || !ctB64 || !tagB64) throw new Error('Invalid encrypted API key format');
+  const key = deriveKey(APP_SECRET);
+  const iv = Buffer.from(ivB64, 'base64');
+  const ciphertext = Buffer.from(ctB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  return plain;
+}
+
+interface Storage {
+  setSession(token: string, username: string, apiKeyEnc: string, ttlSeconds: number): Promise<void>;
+  getSession(token: string): Promise<{ username: string; apiKeyEnc: string } | null>;
+  deleteSession(token: string): Promise<void>;
+  pruneSessions(): Promise<void>;
+  countActiveSessions(): Promise<number>;
+}
+
+class MemoryStorage implements Storage {
+  private sessions = new Map<string, SessionRecord>();
+
+  async setSession(token: string, username: string, apiKeyEnc: string, ttlSeconds: number): Promise<void> {
+    const expiresAt = Date.now() + ttlSeconds * 1000;
+    this.sessions.set(token, { username, apiKeyEnc, expiresAt });
+  }
+
+  async getSession(token: string): Promise<{ username: string; apiKeyEnc: string } | null> {
+    const rec = this.sessions.get(token);
+    if (!rec) return null;
+    if (rec.expiresAt <= Date.now()) {
+      this.sessions.delete(token);
+      return null;
+    }
+    return { username: rec.username, apiKeyEnc: rec.apiKeyEnc };
+  }
+
+  async deleteSession(token: string): Promise<void> {
+    this.sessions.delete(token);
+  }
+
+  async pruneSessions(): Promise<void> {
+    const now = Date.now();
+    for (const [token, rec] of this.sessions.entries()) {
+      if (rec.expiresAt <= now) this.sessions.delete(token);
+    }
+  }
+
+  async countActiveSessions(): Promise<number> {
+    await this.pruneSessions();
+    return this.sessions.size;
+  }
+}
+
+class RedisStorage implements Storage {
+  constructor(private redis: Redis) {}
+
+  async setSession(token: string, username: string, apiKeyEnc: string, ttlSeconds: number): Promise<void> {
+    const sessionKey = `session:${token}`;
+    await this.redis.set(sessionKey, JSON.stringify({ username, apiKeyEnc }), { ex: ttlSeconds });
+    await this.redis.sadd('sessions', token);
+  }
+
+  async getSession(token: string): Promise<{ username: string; apiKeyEnc: string } | null> {
+    const sessionKey = `session:${token}`;
+    const raw = await this.redis.get<string>(sessionKey);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { username?: unknown; apiKeyEnc?: unknown };
+      if (typeof parsed.username !== 'string' || typeof parsed.apiKeyEnc !== 'string') return null;
+      return { username: parsed.username, apiKeyEnc: parsed.apiKeyEnc };
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteSession(token: string): Promise<void> {
+    await this.redis.del(`session:${token}`);
+    await this.redis.srem('sessions', token);
+  }
+
+  async pruneSessions(): Promise<void> {
+    const tokens = await this.redis.smembers<string[]>('sessions');
+    if (!tokens?.length) return;
+    // small scale => safe to prune linearly
+    for (const token of tokens) {
+      const exists = await this.redis.exists(`session:${token}`);
+      if (!exists) {
+        await this.redis.srem('sessions', token);
+      }
+    }
+  }
+
+  async countActiveSessions(): Promise<number> {
+    await this.pruneSessions();
+    return (await this.redis.scard('sessions')) ?? 0;
+  }
+}
+
+const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+const redis = upstashUrl && upstashToken ? new Redis({ url: upstashUrl, token: upstashToken }) : null;
+const storage: Storage = redis ? new RedisStorage(redis) : new MemoryStorage();
+
+const rateLimiters = new Map<string, Ratelimit>();
+const memRate = new Map<string, { resetAt: number; count: number }>();
+
+function parseWindowToMs(window: string): number {
+  const m = window.trim().match(/^(\d+)\s*(s|m|h|d)$/i);
+  if (!m) return 60_000;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  if (unit === 's') return n * 1000;
+  if (unit === 'm') return n * 60_000;
+  if (unit === 'h') return n * 3_600_000;
+  if (unit === 'd') return n * 86_400_000;
+  return 60_000;
+}
+
+function getLimiter(name: string, limit: number, window: string): Ratelimit | null {
+  if (!redis) return null;
+  const key = `${name}:${limit}:${window}`;
+  const existing = rateLimiters.get(key);
+  if (existing) return existing;
+  const created = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(limit, window as any),
+    analytics: true,
+    prefix: `pdf-translator:${name}`,
+  });
+  rateLimiters.set(key, created);
+  return created;
+}
+
+function rateLimitOrNext(opts: { name: string; limit?: number; window?: string }) {
+  // If Upstash ratelimit is configured, we use it. Otherwise we do nothing here.
+  const limit = opts.limit ?? 30;
+  const window = opts.window ?? '1 m';
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const limiter = getLimiter(opts.name, limit, window);
+      if (!limiter) {
+        // In-memory fallback (best-effort; suitable for dev / single instance)
+        const ip = getClientIp(req);
+        const key = `${opts.name}:${ip}`;
+        const windowMs = parseWindowToMs(window);
+        const now = Date.now();
+        const rec = memRate.get(key);
+        if (!rec || rec.resetAt <= now) {
+          memRate.set(key, { resetAt: now + windowMs, count: 1 });
+          return next();
+        }
+        if (rec.count >= limit) {
+          res.setHeader('X-RateLimit-Remaining', '0');
+          res.setHeader('X-RateLimit-Reset', String(Math.floor(rec.resetAt / 1000)));
+          return res.status(429).json({ error: 'Rate limit exceeded' });
+        }
+        rec.count += 1;
+        memRate.set(key, rec);
+        res.setHeader('X-RateLimit-Remaining', String(Math.max(0, limit - rec.count)));
+        res.setHeader('X-RateLimit-Reset', String(Math.floor(rec.resetAt / 1000)));
+        return next();
+      }
+      const ip = getClientIp(req);
+      const key = `${opts.name}:${ip}`;
+      const { success, reset, remaining } = await limiter.limit(key);
+      res.setHeader('X-RateLimit-Remaining', String(remaining));
+      res.setHeader('X-RateLimit-Reset', String(reset));
+      if (!success) {
+        return res.status(429).json({ error: 'Rate limit exceeded' });
+      }
+      return next();
+    } catch {
+      // Fail open
+      return next();
+    }
+  };
+}
+
+type AuthedRequest = Request & { auth?: { username: string; token: string; apiKeyEnc: string } };
+
+async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+  const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: 'Missing auth token' });
+  const session = await storage.getSession(token);
+  if (!session) return res.status(401).json({ error: 'Invalid or expired session' });
+  req.auth = { username: session.username, apiKeyEnc: session.apiKeyEnc, token };
+  return next();
+}
+
+app.post('/api/auth/login', rateLimitOrNext({ name: 'auth-login', limit: 10, window: '10 m' }), async (req: Request, res: Response) => {
+  try {
+    const { username, password, openaiApiKey } = req.body ?? {};
+    if (typeof username !== 'string' || typeof password !== 'string' || typeof openaiApiKey !== 'string') {
+      return res.status(400).json({ error: 'Missing username, password, or openaiApiKey' });
+    }
+    if (!APP_SECRET) {
+      return res.status(500).json({ error: 'Server misconfigured: missing APP_SECRET' });
+    }
+    if (!openaiApiKey.trim().startsWith('sk-')) {
+      return res.status(400).json({ error: 'OpenAI API key must start with sk-' });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    if (cleanUsername !== 'mara' && cleanUsername !== 'baru') {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    const configured = cleanUsername === 'mara' ? AUTH_MARA_PASSWORD : AUTH_BARU_PASSWORD;
+    const ok = await verifyPassword(password, configured);
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const active = await storage.countActiveSessions();
+    if (active >= MAX_ACTIVE_SESSIONS) {
+      return res.status(429).json({ error: `Maximum ${MAX_ACTIVE_SESSIONS} active users already logged in` });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const apiKeyEnc = encryptApiKey(openaiApiKey.trim());
+    await storage.setSession(token, cleanUsername, apiKeyEnc, SESSION_TTL_SECONDS);
+
+    return res.json({ token, username: cleanUsername, expiresIn: SESSION_TTL_SECONDS });
+  } catch (e) {
+    console.error('Login error', e);
+    return res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+app.post('/api/auth/logout', requireAuth, async (req: AuthedRequest, res: Response) => {
+  try {
+    await storage.deleteSession(req.auth!.token);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('Logout error', e);
+    return res.status(500).json({ error: 'Logout failed' });
+  }
+});
+
+app.get('/api/auth/me', requireAuth, async (req: AuthedRequest, res: Response) => {
+  return res.json({ username: req.auth!.username });
+});
 
 // Simple cache for translations (page + language → translation)
 interface CacheKey {
@@ -33,8 +347,9 @@ function getCacheKey(pageText: string, targetLanguage: string): string {
 }
 
 // SSE Translation endpoint with streaming
-app.post('/api/translate-stream', async (req: Request, res: Response) => {
+app.post('/api/translate-stream', rateLimitOrNext({ name: 'translate', limit: 30, window: '1 m' }), requireAuth, async (req: AuthedRequest, res: Response) => {
   const { pageText, targetLanguage, force = false } = req.body;
+  const username = req.auth!.username;
 
   console.log('🔄 Translation request received:', {
     targetLanguage,
@@ -48,7 +363,8 @@ app.post('/api/translate-stream', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing pageText or targetLanguage' });
   }
 
-  const cacheKey = getCacheKey(pageText, targetLanguage);
+  // Cache per-user to avoid cross-user data leakage
+  const cacheKey = `${username}:${getCacheKey(pageText, targetLanguage)}`;
   
   // Check cache first (unless force is true)
   if (!force && translationCache.has(cacheKey)) {
@@ -60,7 +376,7 @@ app.post('/api/translate-stream', async (req: Request, res: Response) => {
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
     });
     
     const cachedTranslation = translationCache.get(cacheKey);
@@ -81,16 +397,21 @@ app.post('/api/translate-stream', async (req: Request, res: Response) => {
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
   });
 
-  // Check if we have a valid OpenAI API key
-  const hasValidApiKey = process.env.OPENAI_API_KEY && 
-                        process.env.OPENAI_API_KEY !== 'sk-your-openai-api-key-here' &&
-                        process.env.OPENAI_API_KEY.startsWith('sk-');
+  // Load OpenAI API key from current session
+  let userApiKey: string | null = null;
+  try {
+    userApiKey = decryptApiKey(req.auth!.apiKeyEnc);
+  } catch (e) {
+    console.error('Failed to decrypt session API key', e);
+  }
 
-  if (!hasValidApiKey) {
-    console.log('🚫 No valid OpenAI API key found - using DEMO mode');
+  const hasValidUserApiKey = typeof userApiKey === 'string' && userApiKey.startsWith('sk-');
+
+  if (!hasValidUserApiKey) {
+    console.log('🚫 No valid OpenAI API key in session - using DEMO mode');
     
     // Demo mode - simulate streaming translation
     const demoTranslation = `
@@ -148,6 +469,7 @@ Toto je ukázkový překlad textu ze stránky PDF dokumentu.
 
   try {
     console.log('🤖 Using real OpenAI API for translation');
+    const openai = new OpenAI({ apiKey: userApiKey! });
     
     // Create OpenAI streaming completion
     const stream = await openai.chat.completions.create({
