@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { Redis } from '@upstash/redis';
 import { Ratelimit } from '@upstash/ratelimit';
-import { queueLoginEmail } from './email';
+import { queueLoginEmail, trySendLoginEmail } from './email';
 
 dotenv.config();
 
@@ -363,8 +363,21 @@ app.post('/api/auth/login', rateLimitOrNext({ name: 'auth-login', limit: 10, win
       token = createStatelessToken({ username: cleanUsername, apiKeyEnc, ttlSeconds: SESSION_TTL_SECONDS });
     }
 
-    const emailQueued = queueLoginEmail({ username: cleanUsername, req });
+    const wantsEmailDebugSync = (process.env.EMAIL_DEBUG_SYNC || '').trim() === '1';
+    if (wantsEmailDebugSync) {
+      const result = await trySendLoginEmail({ username: cleanUsername, req });
+      return res.json({
+        token,
+        username: cleanUsername,
+        expiresIn: SESSION_TTL_SECONDS,
+        emailQueued: result.ok || result.error.message !== 'SMTP not configured',
+        emailOk: result.ok,
+        emailSource: result.source,
+        emailError: result.ok ? undefined : result.error,
+      });
+    }
 
+    const emailQueued = queueLoginEmail({ username: cleanUsername, req });
     return res.json({ token, username: cleanUsername, expiresIn: SESSION_TTL_SECONDS, emailQueued });
   } catch (e) {
     console.error('Login error', e);
