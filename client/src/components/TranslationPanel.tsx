@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TranslationService, TranslationEvent } from '../services/translationService';
 
 interface TranslationPanelProps {
@@ -27,7 +27,16 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [bulkStatus, setBulkStatus] = useState<string>('');
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [rangeExportUrl, setRangeExportUrl] = useState<string | null>(null);
+  const rangePrintWindowRef = useRef<Window | null>(null);
   const translationService = TranslationService.getInstance();
+
+  // Cleanup any previous blob URL when replaced/unmounted
+  useEffect(() => {
+    return () => {
+      if (rangeExportUrl) URL.revokeObjectURL(rangeExportUrl);
+    };
+  }, [rangeExportUrl]);
 
   // Available languages for translation
   const languages = [
@@ -332,7 +341,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       .trim();
   };
 
-  const exportRangeToPdf = (pages: Array<{ pageNumber: number; translatedText: string }>) => {
+  const buildRangeExportHtml = (pages: Array<{ pageNumber: number; translatedText: string }>) => {
     const formatTextAsHTML = (text: string) => {
       const prettyText = reflowTranslatedText(text);
       return prettyText
@@ -370,7 +379,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       })
       .join('\n');
 
-    const htmlContent = `
+    return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -435,18 +444,21 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   <button class="no-print" onclick="window.print()" style="position: fixed; top: 10px; right: 10px; padding: 15px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">📄 Tisknout do PDF</button>
 </body>
 </html>`;
+  };
 
-    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const printWindow = window.open(url, '_blank');
-    if (printWindow) {
-      printWindow.onload = () => {
+  const openRangeExportUrl = (url: string) => {
+    const w = window.open(url, '_blank');
+    if (w) {
+      w.onload = () => {
         setTimeout(() => {
-          printWindow.print();
+          try {
+            w.print();
+          } catch {
+            // ignore
+          }
         }, 250);
       };
     }
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
   const translateRangeAndSave = async () => {
@@ -464,6 +476,23 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       `Přeložit strany ${from}–${to} (${count} stran) a uložit do PDF?\n\nMůže to trvat několik minut podle délky textu a rychlosti API.`
     );
     if (!ok) return;
+
+    // Reset previous export link and pre-open a window immediately (important for iOS/Safari popup rules).
+    setRangeExportUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    try {
+      const w = window.open('', '_blank');
+      if (w) {
+        rangePrintWindowRef.current = w;
+        w.document.open();
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Připravuje se export…</title></head><body style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; padding: 24px;"><h2>Připravuje se export…</h2><p>Nechte toto okno otevřené. Až bude překlad hotový, zobrazí se zde tisk do PDF.</p></body></html>`);
+        w.document.close();
+      }
+    } catch {
+      rangePrintWindowRef.current = null;
+    }
 
     setError('');
     setIsTranslating(true);
@@ -486,8 +515,36 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         await new Promise((r) => setTimeout(r, 250));
       }
 
-      setBulkStatus('Hotovo. Otevírám tisk do PDF…');
-      exportRangeToPdf(translations);
+      const html = buildRangeExportHtml(translations);
+
+      // Try to render into the pre-opened window (best UX, avoids popup blockers).
+      const w = rangePrintWindowRef.current;
+      rangePrintWindowRef.current = null;
+      let usedPreopened = false;
+      if (w && !w.closed) {
+        try {
+          w.document.open();
+          w.document.write(html);
+          w.document.close();
+          usedPreopened = true;
+          setTimeout(() => {
+            try {
+              w.focus();
+              w.print();
+            } catch {
+              // ignore
+            }
+          }, 400);
+        } catch {
+          usedPreopened = false;
+        }
+      }
+
+      if (!usedPreopened) {
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        setRangeExportUrl(url);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Chyba při překladu rozsahu');
     } finally {
@@ -581,6 +638,18 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
               </button>
               <span style={{ color: '#666', fontSize: '0.9rem' }}>Může to trvat několik minut.</span>
             </div>
+
+            {rangeExportUrl && (
+              <div style={{ marginTop: '10px' }}>
+                <button
+                  onClick={() => openRangeExportUrl(rangeExportUrl)}
+                  className="range-pdf-button"
+                  title="Otevře export v novém okně (pokud se automaticky neotevřel)"
+                >
+                  Otevřít tisk do PDF
+                </button>
+              </div>
+            )}
           </div>
         )}
         {bulkStatus && (
