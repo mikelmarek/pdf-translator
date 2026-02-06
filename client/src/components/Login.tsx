@@ -5,9 +5,16 @@ interface LoginProps {
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
+  const OPENAI_KEY_STORAGE_KEY = 'pdf-translator-openai-api-key';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [openaiApiKey, setOpenaiApiKey] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState(() => {
+    try {
+      return localStorage.getItem(OPENAI_KEY_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -46,7 +53,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
       if (!loginData.token) throw new Error('Chybí token ze serveru');
       // clear sensitive inputs ASAP
-      setOpenaiApiKey('');
       setPassword('');
       onLogin(loginData.token, loginData.username || cleanUsername);
     } catch (err) {
@@ -94,10 +100,21 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             <input
               type="password"
               value={openaiApiKey}
-              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setOpenaiApiKey(v);
+                try {
+                  if (v.trim()) localStorage.setItem(OPENAI_KEY_STORAGE_KEY, v);
+                  else localStorage.removeItem(OPENAI_KEY_STORAGE_KEY);
+                } catch {
+                  // ignore
+                }
+              }}
               placeholder="OpenAI API klíč (sk-...)"
               className="password-input"
               autoComplete="off"
+              name="openaiApiKey"
+              id="openaiApiKey"
             />
           </div>
           
