@@ -38,6 +38,31 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     };
   }, [rangeExportUrl]);
 
+  const setRangePopupProgress = (args: { title: string; detail?: string; current?: number; total?: number }) => {
+    const w = rangePrintWindowRef.current;
+    if (!w || w.closed) return;
+    try {
+      const titleEl = w.document.getElementById('export-title');
+      const detailEl = w.document.getElementById('export-detail');
+      const meterEl = w.document.getElementById('export-meter') as HTMLDivElement | null;
+      const metaEl = w.document.getElementById('export-meta');
+
+      if (titleEl) titleEl.textContent = args.title;
+      if (detailEl) detailEl.textContent = args.detail ?? '';
+
+      if (typeof args.current === 'number' && typeof args.total === 'number' && args.total > 0) {
+        const pct = Math.max(0, Math.min(100, Math.round((args.current / args.total) * 100)));
+        if (meterEl) meterEl.style.width = `${pct}%`;
+        if (metaEl) metaEl.textContent = `${args.current}/${args.total} (${pct}%)`;
+      } else {
+        if (meterEl) meterEl.style.width = '0%';
+        if (metaEl) metaEl.textContent = '';
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   // Available languages for translation
   const languages = [
     { code: 'czech', label: 'Čeština' },
@@ -487,8 +512,16 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       if (w) {
         rangePrintWindowRef.current = w;
         w.document.open();
-        w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Připravuje se export…</title></head><body style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; padding: 24px;"><h2>Připravuje se export…</h2><p>Nechte toto okno otevřené. Až bude překlad hotový, zobrazí se zde tisk do PDF.</p></body></html>`);
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Export do PDF</title></head><body style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; padding: 24px; line-height: 1.5;">
+<h2 id="export-title" style="margin: 0 0 8px 0;">Připravuje se export…</h2>
+<div id="export-detail" style="color: #555; margin-bottom: 12px;">Nechte toto okno otevřené. Až bude překlad hotový, zobrazí se zde tisk do PDF.</div>
+<div style="height: 10px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin: 12px 0;">
+  <div id="export-meter" style="height: 100%; width: 0%; background: #3b82f6;"></div>
+</div>
+<div id="export-meta" style="color: #555; font-size: 14px;"></div>
+</body></html>`);
         w.document.close();
+        setRangePopupProgress({ title: 'Připravuje se export…', detail: 'Načítám texty stránek…', current: 0, total: count });
       }
     } catch {
       rangePrintWindowRef.current = null;
@@ -498,6 +531,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     setIsTranslating(true);
     setBulkStatus('Načítám texty stránek…');
     setBulkProgress({ current: 0, total: count });
+    setRangePopupProgress({ title: 'Připravuje se export…', detail: 'Načítám texty stránek…', current: 0, total: count });
 
     try {
       const pages = await extractPagesText(from, to);
@@ -507,6 +541,12 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         const p = pages[i];
         setBulkStatus(`Překládám stránku ${p.pageNumber} (${i + 1}/${pages.length})…`);
         setBulkProgress({ current: i + 1, total: pages.length });
+        setRangePopupProgress({
+          title: 'Připravuje se export…',
+          detail: `Překládám stránku ${p.pageNumber}…`,
+          current: i + 1,
+          total: pages.length,
+        });
 
         const translated = await translationService.translateToString(p.pageText, targetLanguage, false);
         translations.push({ pageNumber: p.pageNumber, translatedText: translated });
@@ -516,6 +556,8 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       }
 
       const html = buildRangeExportHtml(translations);
+
+      setRangePopupProgress({ title: 'Hotovo', detail: 'Otevírám tisk do PDF…', current: pages.length, total: pages.length });
 
       // Try to render into the pre-opened window (best UX, avoids popup blockers).
       const w = rangePrintWindowRef.current;
