@@ -1,22 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface LoginProps {
   onLogin: (token: string, username: string) => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const OPENAI_KEY_STORAGE_KEY = 'pdf-translator-openai-api-key';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [openaiApiKey, setOpenaiApiKey] = useState(() => {
-    try {
-      return localStorage.getItem(OPENAI_KEY_STORAGE_KEY) || '';
-    } catch {
-      return '';
-    }
-  });
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Security: do not persist API keys. Also remove any previously stored key.
+  useEffect(() => {
+    try {
+      localStorage.removeItem('pdf-translator-openai-api-key');
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +55,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
       if (!loginData.token) throw new Error('Chybí token ze serveru');
       // clear sensitive inputs ASAP
+      setOpenaiApiKey('');
       setPassword('');
       onLogin(loginData.token, loginData.username || cleanUsername);
     } catch (err) {
@@ -100,16 +103,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             <input
               type="password"
               value={openaiApiKey}
-              onChange={(e) => {
-                const v = e.target.value;
-                setOpenaiApiKey(v);
-                try {
-                  if (v.trim()) localStorage.setItem(OPENAI_KEY_STORAGE_KEY, v);
-                  else localStorage.removeItem(OPENAI_KEY_STORAGE_KEY);
-                } catch {
-                  // ignore
-                }
-              }}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
               placeholder="OpenAI API klíč (sk-...)"
               className="password-input"
               autoComplete="off"
