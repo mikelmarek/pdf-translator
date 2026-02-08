@@ -133,7 +133,8 @@ export class TranslationService {
     onData: (event: TranslationEvent) => void,
     onError?: (error: Error) => void,
     onComplete?: () => void,
-    pageNumber?: number
+    pageNumber?: number,
+    userInstructions?: string
   ): Promise<void> {
     // Cancel any existing stream
     this.cancelCurrentStream();
@@ -150,7 +151,7 @@ export class TranslationService {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         signal: abortController.signal,
-        body: JSON.stringify({ text, outputLanguage, task, pageNumber }),
+        body: JSON.stringify({ text, outputLanguage, task, pageNumber, userInstructions }),
       });
 
       if (!response.ok) {
@@ -253,7 +254,8 @@ export class TranslationService {
     text: string,
     outputLanguage: string,
     task: SummarizeTask,
-    pageNumber?: number
+    pageNumber?: number,
+    userInstructions?: string
   ): Promise<string> {
     let acc = '';
     return new Promise<string>((resolve, reject) => {
@@ -271,7 +273,8 @@ export class TranslationService {
         },
         (err) => reject(err),
         undefined,
-        pageNumber
+        pageNumber,
+        userInstructions
       );
     });
   }

@@ -158,6 +158,29 @@ body {
   overflow: auto;
 }
 
+/* Přepínač obsahu v pravém panelu */
+.right-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.right-tab-button {
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 123, 255, 0.35);
+  background: rgba(0, 123, 255, 0.08);
+  color: #007bff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.right-tab-button.active {
+  background: #007bff;
+  color: #fff;
+  border-color: #007bff;
+}
+
 /* PDF viewer */
 .pdf-viewer {
   display: flex;

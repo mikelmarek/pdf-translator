@@ -21,11 +21,13 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const [translatedText, setTranslatedText] = useState<string>('');
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
+  const [activeRightTab, setActiveRightTab] = useState<'translation' | 'summary'>('translation');
   const [error, setError] = useState<string>('');
   const [summaryError, setSummaryError] = useState<string>('');
   const [summaryText, setSummaryText] = useState<string>('');
   const [summaryStatus, setSummaryStatus] = useState<string>('');
   const [summaryProgress, setSummaryProgress] = useState<{ current: number; total: number } | null>(null);
+  const [summaryInstructions, setSummaryInstructions] = useState<string>('');
   const [lastTranslatedPage, setLastTranslatedPage] = useState<number>(0);
   const [rangeFrom, setRangeFrom] = useState<number>(1);
   const [rangeTo, setRangeTo] = useState<number>(1);
@@ -89,6 +91,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
     console.log('🔄 Starting translation for page', currentPage, 'with', pageText.length, 'characters', force ? '(FORCED)' : '');
 
+    setActiveRightTab('translation');
     setIsTranslating(true);
     setError('');
     setTranslatedText('');
@@ -154,6 +157,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
     const outputLanguage = languages.find((l) => l.code === targetLanguage)?.label ?? targetLanguage;
 
+    setActiveRightTab('summary');
     setIsSummarizing(true);
     setSummaryError('');
     setSummaryText('');
@@ -197,7 +201,8 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         handleData,
         handleError,
         handleComplete,
-        currentPage
+        currentPage,
+        summaryInstructions
       );
     } catch (e) {
       handleError(e instanceof Error ? e : new Error('Unknown error'));
@@ -212,6 +217,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     const from = Math.max(1, Math.min(totalPages, Math.min(rangeFrom, rangeTo)));
     const to = Math.max(1, Math.min(totalPages, Math.max(rangeFrom, rangeTo)));
 
+    setActiveRightTab('summary');
     setIsSummarizing(true);
     setSummaryError('');
     setSummaryText('');
@@ -230,7 +236,13 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         setSummaryStatus(`Analyzuji stránku ${p.pageNumber}…`);
         setSummaryProgress({ current: i + 1, total: pages.length });
 
-        const notes = await translationService.summarizeToString(p.pageText, outputLanguage, 'notes', p.pageNumber);
+        const notes = await translationService.summarizeToString(
+          p.pageText,
+          outputLanguage,
+          'notes',
+          p.pageNumber,
+          summaryInstructions
+        );
         aggregatedNotes += `Stránka ${p.pageNumber}:\n${notes}\n\n`;
       }
 
@@ -268,7 +280,9 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
           setSummaryStatus('');
           setSummaryProgress(null);
           setIsSummarizing(false);
-        }
+        },
+        undefined,
+        summaryInstructions
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Chyba při sumarizaci rozsahu';
@@ -887,9 +901,139 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
                   Sumarizovat rozsah
                 </button>
                 <span style={{ color: '#666', fontSize: '0.9rem' }}>Výstup je v jazyce zvoleném nahoře.</span>
+              </div>
 
-                {summaryText && (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ color: '#666', fontSize: '0.9rem', marginBottom: '6px' }}>
+                  Instrukce k sumarizaci (volitelné)
+                </div>
+                <textarea
+                  value={summaryInstructions}
+                  onChange={(e) => setSummaryInstructions(e.target.value)}
+                  placeholder="Např.: Zaměř se na termíny a částky. Vyjmenuj všechny povinnosti a deadliny. Uveď nejistoty a chybějící informace."
+                  disabled={isSummarizing || isTranslating}
+                  rows={3}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ddd', resize: 'vertical' }}
+                />
+                <div style={{ color: '#666', fontSize: '0.85rem', marginTop: '4px' }}>
+                  Neukládá se. Platí pro „stránku“ i „rozsah“.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="right-tabs" role="tablist" aria-label="Zobrazení">
+          <button
+            type="button"
+            className={`right-tab-button ${activeRightTab === 'translation' ? 'active' : ''}`}
+            onClick={() => setActiveRightTab('translation')}
+            aria-selected={activeRightTab === 'translation'}
+          >
+            Překlad
+          </button>
+          <button
+            type="button"
+            className={`right-tab-button ${activeRightTab === 'summary' ? 'active' : ''}`}
+            onClick={() => setActiveRightTab('summary')}
+            aria-selected={activeRightTab === 'summary'}
+          >
+            Sumarizace
+          </button>
+        </div>
+
+        {activeRightTab === 'translation' ? (
+          <>
+            {bulkStatus && (
+              <div className="translation-loading">
+                {bulkStatus}
+                {bulkProgress ? ` (${bulkProgress.current}/${bulkProgress.total})` : ''}
+              </div>
+            )}
+
+            {error && (
+              <div className="translation-error">
+                {error}
+              </div>
+            )}
+
+            {isTranslating && !translatedText && (
+              <div className="translation-loading">
+                Spouští se překlad...
+              </div>
+            )}
+
+            {translatedText && (
+              <div className="translation-content">
+                {(() => {
+                  const prettyText = reflowTranslatedText(translatedText);
+                  return prettyText.split('\n').map((line, i, allLines) => {
+                    const trimmedLine = line.trim();
+
+                    // Identify line type
+                    const isBullet = trimmedLine.startsWith('•');
+                    const isNumberedBullet = /^\d+\.\s/.test(trimmedLine); // 1. 2. 3. jsou také odrážky
+                    const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine); // 0 Úvod (bez tečky)
+                    const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine); // 0.1, 0.2.1 apod.
+
+                    // Check if previous line was a bullet and this continues it (simplified)
+                    const isPreviousBullet = i > 0 && (
+                      /^\d+\.\s/.test(allLines[i - 1].trim()) ||
+                      allLines[i - 1].trim().startsWith('•')
+                    );
+
+                    const isContinuation =
+                      isPreviousBullet &&
+                      trimmedLine.length > 0 &&
+                      !isBullet &&
+                      !isNumberedBullet &&
+                      !isMainHeading &&
+                      !isSubHeading;
+
+                    // Determine CSS class
+                    let className = 'text-line';
+                    if (isBullet || isNumberedBullet) className = 'bullet-line';
+                    else if (isContinuation) className = 'bullet-continuation';
+                    else if (isSubHeading) className = 'sub-heading-line';
+                    else if (isMainHeading) className = 'heading-line';
+
+                    return (
+                      <div key={i} className={className}>
+                        {line || '\u00A0'} {/* Non-breaking space for empty lines */}
+                      </div>
+                    );
+                  });
+                })()}
+                {isTranslating && <span style={{ animation: 'blink 1s infinite' }}>▋</span>}
+              </div>
+            )}
+
+            {!pageText && !isTranslating && !error && (
+              <div className="translation-loading">
+                Vyberte PDF soubor a stránku pro překlad.
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {(summaryStatus || (isSummarizing && summaryProgress)) && (
+              <div style={{ marginBottom: '8px', color: '#666', fontSize: '0.9rem' }}>
+                {summaryStatus}
+                {summaryProgress ? ` (${summaryProgress.current}/${summaryProgress.total})` : ''}
+              </div>
+            )}
+
+            {summaryError && (
+              <div style={{ marginBottom: '8px', color: '#b00020' }}>
+                {summaryError}
+              </div>
+            )}
+
+            {summaryText ? (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
                   <button
+                    type="button"
                     onClick={clearSummary}
                     disabled={isSummarizing || isTranslating}
                     className="range-pdf-button"
@@ -897,26 +1041,10 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
                   >
                     Vymazat sumarizaci
                   </button>
-                )}
-              </div>
-
-              {(summaryStatus || (isSummarizing && summaryProgress)) && (
-                <div style={{ marginTop: '8px', color: '#666', fontSize: '0.9rem' }}>
-                  {summaryStatus}
-                  {summaryProgress ? ` (${summaryProgress.current}/${summaryProgress.total})` : ''}
                 </div>
-              )}
 
-              {summaryError && (
-                <div style={{ marginTop: '8px', color: '#b00020' }}>
-                  {summaryError}
-                </div>
-              )}
-
-              {summaryText && (
                 <div
                   style={{
-                    marginTop: '10px',
                     border: '1px solid #ddd',
                     borderRadius: '6px',
                     padding: '10px',
@@ -928,80 +1056,11 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
                   {summaryText}
                   {isSummarizing && <span style={{ animation: 'blink 1s infinite' }}>▋</span>}
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-        {bulkStatus && (
-          <div className="translation-loading">
-            {bulkStatus}
-            {bulkProgress ? ` (${bulkProgress.current}/${bulkProgress.total})` : ''}
-          </div>
-        )}
-
-        {error && (
-          <div className="translation-error">
-            {error}
-          </div>
-        )}
-        
-        {isTranslating && !translatedText && (
-          <div className="translation-loading">
-            Spouští se překlad...
-          </div>
-        )}
-
-        {translatedText && (
-          <div className="translation-content">
-            {(() => {
-              const prettyText = reflowTranslatedText(translatedText);
-              return prettyText.split('\n').map((line, i, allLines) => {
-                const trimmedLine = line.trim();
-                
-                // Identify line type
-                const isBullet = trimmedLine.startsWith('•');
-                const isNumberedBullet = /^\d+\.\s/.test(trimmedLine); // 1. 2. 3. jsou také odrážky
-                const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine); // 0 Úvod (bez tečky)
-                const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine); // 0.1, 0.2.1 apod.
-                
-                // Check if previous line was a bullet and this continues it (simplified)
-                const isPreviousBullet = i > 0 && (
-                  /^\d+\.\s/.test(allLines[i-1].trim()) || 
-                  allLines[i-1].trim().startsWith('•')
-                );
-                
-                const isContinuation =
-                  isPreviousBullet &&
-                  trimmedLine.length > 0 &&
-                  !isBullet &&
-                  !isNumberedBullet &&
-                  !isMainHeading &&
-                  !isSubHeading;
-                
-                // Determine CSS class
-                let className = 'text-line';
-                if (isBullet || isNumberedBullet) className = 'bullet-line';
-                else if (isContinuation) className = 'bullet-continuation';
-                else if (isSubHeading) className = 'sub-heading-line';
-                else if (isMainHeading) className = 'heading-line';
-                
-                return (
-                  <div key={i} className={className}>
-                    {line || '\u00A0'} {/* Non-breaking space for empty lines */}
-                  </div>
-                );
-              });
-            })()}
-            {isTranslating && (
-              <span style={{ animation: 'blink 1s infinite' }}>▋</span>
+              </>
+            ) : (
+              <div className="translation-loading">Zatím žádná sumarizace.</div>
             )}
-          </div>
-        )}
-
-        {!pageText && !isTranslating && !error && (
-          <div className="translation-loading">
-            Vyberte PDF soubor a stránku pro překlad.
-          </div>
+          </>
         )}
       </div>
     </>
