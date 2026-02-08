@@ -20,7 +20,12 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 }) => {
   const [translatedText, setTranslatedText] = useState<string>('');
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
+  const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [summaryError, setSummaryError] = useState<string>('');
+  const [summaryText, setSummaryText] = useState<string>('');
+  const [summaryStatus, setSummaryStatus] = useState<string>('');
+  const [summaryProgress, setSummaryProgress] = useState<{ current: number; total: number } | null>(null);
   const [lastTranslatedPage, setLastTranslatedPage] = useState<number>(0);
   const [rangeFrom, setRangeFrom] = useState<number>(1);
   const [rangeTo, setRangeTo] = useState<number>(1);
@@ -29,6 +34,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [rangeExportUrl, setRangeExportUrl] = useState<string | null>(null);
   const rangePrintWindowRef = useRef<Window | null>(null);
+  const stopRequestedRef = useRef<boolean>(false);
   const translationService = TranslationService.getInstance();
 
   // Cleanup any previous blob URL when replaced/unmounted
@@ -79,7 +85,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
   // Start translation with streaming
   const startTranslation = async (force: boolean = false) => {
-    if (!pageText.trim() || isTranslating) return;
+    if (!pageText.trim() || isTranslating || isSummarizing) return;
 
     console.log('🔄 Starting translation for page', currentPage, 'with', pageText.length, 'characters', force ? '(FORCED)' : '');
 
@@ -87,6 +93,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     setError('');
     setTranslatedText('');
     setLastTranslatedPage(currentPage);
+    stopRequestedRef.current = false;
 
     // Handle streaming translation events
     const handleTranslationData = (event: TranslationEvent) => {
@@ -117,7 +124,9 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
     const handleTranslationError = (error: Error) => {
       console.error('❌ Translation error:', error);
-      setError(`Chyba při překladu: ${error.message}`);
+      if (!stopRequestedRef.current) {
+        setError(`Chyba při překladu: ${error.message}`);
+      }
       setIsTranslating(false);
     };
 
@@ -138,6 +147,156 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     } catch (error) {
       handleTranslationError(error instanceof Error ? error : new Error('Unknown error'));
     }
+  };
+
+  const summarizeCurrentPage = async () => {
+    if (!pageText.trim() || isTranslating || isSummarizing) return;
+
+    const outputLanguage = languages.find((l) => l.code === targetLanguage)?.label ?? targetLanguage;
+
+    setIsSummarizing(true);
+    setSummaryError('');
+    setSummaryText('');
+    setSummaryStatus(`Sumarizuji stránku ${currentPage}…`);
+    setSummaryProgress(null);
+    stopRequestedRef.current = false;
+
+    const handleData = (event: TranslationEvent) => {
+      if (event.error) {
+        setSummaryError(event.error);
+        return;
+      }
+      if (event.content) {
+        if (event.isDone) setSummaryText(event.content);
+        else setSummaryText((prev) => prev + event.content);
+      }
+      if (event.isDone) {
+        setSummaryStatus('');
+        setIsSummarizing(false);
+      }
+    };
+
+    const handleError = (e: Error) => {
+      if (!stopRequestedRef.current) {
+        setSummaryError(`Chyba při sumarizaci: ${e.message}`);
+      }
+      setSummaryStatus('');
+      setIsSummarizing(false);
+    };
+
+    const handleComplete = () => {
+      setSummaryStatus('');
+      setIsSummarizing(false);
+    };
+
+    try {
+      await translationService.summarizeWithStream(
+        pageText,
+        outputLanguage,
+        'final',
+        handleData,
+        handleError,
+        handleComplete,
+        currentPage
+      );
+    } catch (e) {
+      handleError(e instanceof Error ? e : new Error('Unknown error'));
+    }
+  };
+
+  const summarizeRange = async () => {
+    if (isTranslating || isSummarizing || !totalPages) return;
+
+    const outputLanguage = languages.find((l) => l.code === targetLanguage)?.label ?? targetLanguage;
+
+    const from = Math.max(1, Math.min(totalPages, Math.min(rangeFrom, rangeTo)));
+    const to = Math.max(1, Math.min(totalPages, Math.max(rangeFrom, rangeTo)));
+
+    setIsSummarizing(true);
+    setSummaryError('');
+    setSummaryText('');
+    setSummaryStatus('Načítám stránky…');
+    setSummaryProgress(null);
+    stopRequestedRef.current = false;
+
+    try {
+      const pages = await extractPagesText(from, to);
+      if (!pages.length) throw new Error('Rozsah neobsahuje žádné stránky.');
+
+      let aggregatedNotes = '';
+      for (let i = 0; i < pages.length; i++) {
+        if (stopRequestedRef.current) throw new Error('__STOP__');
+        const p = pages[i];
+        setSummaryStatus(`Analyzuji stránku ${p.pageNumber}…`);
+        setSummaryProgress({ current: i + 1, total: pages.length });
+
+        const notes = await translationService.summarizeToString(p.pageText, outputLanguage, 'notes', p.pageNumber);
+        aggregatedNotes += `Stránka ${p.pageNumber}:\n${notes}\n\n`;
+      }
+
+      setSummaryStatus('Sestavuji finální sumarizaci…');
+      setSummaryProgress({ current: pages.length, total: pages.length });
+
+      await translationService.summarizeWithStream(
+        aggregatedNotes,
+        outputLanguage,
+        'final',
+        (event) => {
+          if (event.error) {
+            setSummaryError(event.error);
+            return;
+          }
+          if (event.content) {
+            if (event.isDone) setSummaryText(event.content);
+            else setSummaryText((prev) => prev + event.content);
+          }
+          if (event.isDone) {
+            setSummaryStatus('');
+            setSummaryProgress(null);
+            setIsSummarizing(false);
+          }
+        },
+        (e) => {
+          if (!stopRequestedRef.current) {
+            setSummaryError(`Chyba při sumarizaci: ${e.message}`);
+          }
+          setSummaryStatus('');
+          setSummaryProgress(null);
+          setIsSummarizing(false);
+        },
+        () => {
+          setSummaryStatus('');
+          setSummaryProgress(null);
+          setIsSummarizing(false);
+        }
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Chyba při sumarizaci rozsahu';
+      if (!stopRequestedRef.current && msg !== '__STOP__') {
+        setSummaryError(msg);
+      }
+      setSummaryStatus('');
+      setSummaryProgress(null);
+      setIsSummarizing(false);
+    }
+  };
+
+  const stopCurrentWork = () => {
+    stopRequestedRef.current = true;
+    translationService.cancelCurrentStream();
+    setIsTranslating(false);
+    setBulkStatus('');
+    setBulkProgress(null);
+    setIsSummarizing(false);
+    setSummaryStatus('');
+    setSummaryProgress(null);
+  };
+
+  const clearSummary = () => {
+    setSummaryText('');
+    setSummaryError('');
+    setSummaryStatus('');
+    setSummaryProgress(null);
   };
 
   // Effect to trigger translation when page or language changes
@@ -493,6 +652,8 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       return;
     }
 
+    stopRequestedRef.current = false;
+
     const from = Math.max(1, Math.min(rangeFrom, rangeTo));
     const to = Math.min(totalPages, Math.max(rangeFrom, rangeTo));
     const count = to - from + 1;
@@ -538,6 +699,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
       const translations: Array<{ pageNumber: number; translatedText: string }> = [];
 
       for (let i = 0; i < pages.length; i += 1) {
+        if (stopRequestedRef.current) throw new Error('__STOP__');
         const p = pages[i];
         setBulkStatus(`Překládám stránku ${p.pageNumber} (${i + 1}/${pages.length})…`);
         setBulkProgress({ current: i + 1, total: pages.length });
@@ -549,6 +711,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         });
 
         const translated = await translationService.translateToString(p.pageText, targetLanguage, false);
+        if (stopRequestedRef.current) throw new Error('__STOP__');
         translations.push({ pageNumber: p.pageNumber, translatedText: translated });
 
         // malé zpomalení kvůli limitům / stabilitě
@@ -588,7 +751,12 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         setRangeExportUrl(url);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Chyba při překladu rozsahu');
+      const msg = e instanceof Error ? e.message : 'Chyba při překladu rozsahu';
+      if (!stopRequestedRef.current && msg !== '__STOP__') {
+        setError(msg);
+      } else {
+        setRangePopupProgress({ title: 'Zastaveno', detail: 'Překlad byl zastaven.', current: 0, total: count });
+      }
     } finally {
       setBulkStatus('');
       setBulkProgress(null);
@@ -613,14 +781,20 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         </select>
         <button 
           onClick={() => startTranslation(true)}
-          disabled={!pageText || isTranslating}
+          disabled={!pageText || isTranslating || isSummarizing}
         >
           {isTranslating ? 'Překládá se...' : 'Přeložit'}
         </button>
+
+        {(isTranslating || isSummarizing || bulkStatus) && (
+          <button onClick={stopCurrentWork} className="save-button" title="Zastaví běžící překlad / sumarizaci">
+            Zastavit
+          </button>
+        )}
         
         <button 
           onClick={saveTranslation}
-          disabled={!translatedText}
+          disabled={!translatedText || isSummarizing}
           className="save-button"
         >
           💾 Uložit
@@ -629,7 +803,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
-          disabled={isTranslating}
+          disabled={isTranslating || isSummarizing}
           className="advanced-toggle-button"
           title="Rozsah stránek → PDF"
           aria-label="Pokročilé: rozsah stránek do PDF"
@@ -672,7 +846,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
               />
               <button
                 onClick={translateRangeAndSave}
-                disabled={!totalPages || isTranslating}
+                disabled={!totalPages || isTranslating || isSummarizing}
                 title="Přeloží vybraný rozsah stránek postupně a otevře tisk do PDF"
                 className="range-pdf-button"
               >
@@ -692,6 +866,70 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
                 </button>
               </div>
             )}
+
+            <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #e5e5e5' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                <span style={{ color: '#666', fontSize: '0.9rem' }}>AI sumarizace (shrnutí / povinnosti / rizika / TODO)</span>
+                <button
+                  onClick={summarizeCurrentPage}
+                  disabled={!pageText || isTranslating || isSummarizing}
+                  className="range-pdf-button"
+                  title="Vytvoří AI sumarizaci aktuální stránky"
+                >
+                  Sumarizovat stránku
+                </button>
+                <button
+                  onClick={summarizeRange}
+                  disabled={!totalPages || isTranslating || isSummarizing}
+                  className="range-pdf-button"
+                  title="Vytvoří AI sumarizaci vybraného rozsahu stránek"
+                >
+                  Sumarizovat rozsah
+                </button>
+                <span style={{ color: '#666', fontSize: '0.9rem' }}>Výstup je v jazyce zvoleném nahoře.</span>
+
+                {summaryText && (
+                  <button
+                    onClick={clearSummary}
+                    disabled={isSummarizing || isTranslating}
+                    className="range-pdf-button"
+                    title="Vymaže zobrazenou sumarizaci"
+                  >
+                    Vymazat sumarizaci
+                  </button>
+                )}
+              </div>
+
+              {(summaryStatus || (isSummarizing && summaryProgress)) && (
+                <div style={{ marginTop: '8px', color: '#666', fontSize: '0.9rem' }}>
+                  {summaryStatus}
+                  {summaryProgress ? ` (${summaryProgress.current}/${summaryProgress.total})` : ''}
+                </div>
+              )}
+
+              {summaryError && (
+                <div style={{ marginTop: '8px', color: '#b00020' }}>
+                  {summaryError}
+                </div>
+              )}
+
+              {summaryText && (
+                <div
+                  style={{
+                    marginTop: '10px',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    padding: '10px',
+                    background: '#fff',
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: 1.55,
+                  }}
+                >
+                  {summaryText}
+                  {isSummarizing && <span style={{ animation: 'blink 1s infinite' }}>▋</span>}
+                </div>
+              )}
+            </div>
           </div>
         )}
         {bulkStatus && (

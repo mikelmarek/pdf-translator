@@ -438,6 +438,17 @@ app.post('/api/translate-stream', rateLimitOrNext({ name: 'translate', limit: 30
   const { pageText, targetLanguage, force = false } = req.body;
   const username = req.auth!.username;
 
+  const abortController = new AbortController();
+  const onClose = () => {
+    try {
+      abortController.abort();
+    } catch {
+      // ignore
+    }
+  };
+  req.on('close', onClose);
+  res.on('close', onClose);
+
   console.log('🔄 Translation request received:', {
     targetLanguage,
     textLength: pageText?.length,
@@ -536,6 +547,7 @@ Toto je ukázkový překlad textu ze stránky PDF dokumentu.
     const chunks = demoTranslation.split(' ');
     
     for (let i = 0; i < chunks.length; i++) {
+      if (abortController.signal.aborted || res.writableEnded) break;
       const chunk = chunks[i] + ' ';
       res.write(`data: ${JSON.stringify({ content: chunk, isDone: false })}\n\n`);
       
@@ -544,13 +556,15 @@ Toto je ukázkový překlad textu ze stránky PDF dokumentu.
     }
 
     // Send final event
-    res.write(`data: ${JSON.stringify({ content: '', isDone: true })}\n\n`);
+    if (!abortController.signal.aborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ content: '', isDone: true })}\n\n`);
+    }
     
     console.log('✅ DEMO translation completed');
     
     // Cache the demo translation
     translationCache.set(cacheKey, demoTranslation);
-    res.end();
+    if (!res.writableEnded) res.end();
     return;
   }
 
@@ -611,12 +625,13 @@ Remember: If the input has line breaks, the output MUST have the same line break
       stream: true,
       temperature: 0.3, // Lower temperature for more consistent translations
       max_tokens: 4000
-    });
+    }, { signal: abortController.signal });
 
     let fullTranslation = '';
 
     // Stream the response
     for await (const chunk of stream) {
+      if (abortController.signal.aborted || res.writableEnded) break;
       const content = chunk.choices[0]?.delta?.content || '';
       if (content) {
         fullTranslation += content;
@@ -627,7 +642,9 @@ Remember: If the input has line breaks, the output MUST have the same line break
     }
 
     // Send final event indicating completion
-    res.write(`data: ${JSON.stringify({ content: '', isDone: true })}\n\n`);
+    if (!abortController.signal.aborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ content: '', isDone: true })}\n\n`);
+    }
     
     console.log('✅ Real OpenAI translation completed');
     
@@ -638,13 +655,110 @@ Remember: If the input has line breaks, the output MUST have the same line break
 
   } catch (error) {
     console.error('❌ Translation error:', error);
-    res.write(`data: ${JSON.stringify({ 
-      error: 'Translation failed. Please try again.', 
-      isDone: true 
-    })}\n\n`);
+    if (!abortController.signal.aborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ 
+        error: 'Translation failed. Please try again.', 
+        isDone: true 
+      })}\n\n`);
+    }
   }
 
-  res.end();
+  if (!res.writableEnded) res.end();
+});
+
+// SSE Summary endpoint with streaming
+app.post('/api/summarize-stream', rateLimitOrNext({ name: 'summarize', limit: 20, window: '1 m' }), requireAuth, async (req: AuthedRequest, res: Response) => {
+  const { text, outputLanguage, task = 'final', pageNumber } = req.body ?? {};
+
+  const abortController = new AbortController();
+  const onClose = () => {
+    try {
+      abortController.abort();
+    } catch {
+      // ignore
+    }
+  };
+  req.on('close', onClose);
+  res.on('close', onClose);
+
+  if (typeof text !== 'string' || typeof outputLanguage !== 'string') {
+    return res.status(400).json({ error: 'Missing text or outputLanguage' });
+  }
+
+  // Set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  });
+
+  // Load OpenAI API key from current session
+  let userApiKey: string | null = null;
+  try {
+    userApiKey = decryptApiKey(req.auth!.apiKeyEnc);
+  } catch (e) {
+    console.error('Failed to decrypt session API key', e);
+  }
+
+  const hasValidUserApiKey = typeof userApiKey === 'string' && userApiKey.startsWith('sk-');
+  if (!hasValidUserApiKey) {
+    const demo = `## Shrnutí\n- (DEMO) Chybí OpenAI API klíč v session\n\n## Checklist povinností\n- (DEMO) —\n\n## Rizika / nejasnosti\n- (DEMO) —\n\n## TODO\n- (DEMO) Doplň OpenAI API klíč při loginu`;
+    if (!abortController.signal.aborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ content: demo, isDone: true })}\n\n`);
+    }
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  const safeTask = task === 'notes' || task === 'final' ? task : 'final';
+  const safePageNumber = typeof pageNumber === 'number' && Number.isFinite(pageNumber) ? pageNumber : undefined;
+
+  try {
+    const openai = new OpenAI({ apiKey: userApiKey! });
+
+    const systemNotes = `You are an expert analyst. Read the provided document text and extract concise notes.\n\nOUTPUT LANGUAGE: ${outputLanguage}\n\nReturn ONLY bullet points (no headings), maximum 12 bullets. Focus on:\n- Key facts / key points\n- Obligations / requirements / action items\n- Risks / ambiguities / missing info\n- TODOs\n\nIf something is not stated, do not invent it.`;
+
+    const systemFinal = `You are an expert analyst. You will receive aggregated notes from a document section (multiple pages).\n\nOUTPUT LANGUAGE: ${outputLanguage}\n\nReturn a structured report EXACTLY in this format (Markdown headings):\n## Shrnutí\n- ...\n\n## Checklist povinností\n- ...\n\n## Rizika / nejasnosti\n- ...\n\n## TODO\n- ...\n\nRules:\n- Be specific, but do not hallucinate.\n- If the text doesn't contain obligations/risks, write "- (nenalezeno v textu)" in that section.\n- Keep it concise and useful for business/study use.`;
+
+    const userPrefix = safeTask === 'notes' && safePageNumber ? `Page ${safePageNumber}:\n` : '';
+    const stream = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: safeTask === 'notes' ? systemNotes : systemFinal,
+        },
+        {
+          role: 'user',
+          content: userPrefix + text,
+        },
+      ],
+      stream: true,
+      temperature: 0.2,
+      max_tokens: 2000,
+    }, { signal: abortController.signal });
+
+    for await (const chunk of stream) {
+      if (abortController.signal.aborted || res.writableEnded) break;
+      const content = chunk.choices[0]?.delta?.content || '';
+      if (content) {
+        res.write(`data: ${JSON.stringify({ content, isDone: false })}\n\n`);
+      }
+    }
+
+    if (!abortController.signal.aborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ content: '', isDone: true })}\n\n`);
+    }
+  } catch (error) {
+    console.error('❌ Summary error:', error);
+    if (!abortController.signal.aborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ error: 'Summarization failed. Please try again.', isDone: true })}\n\n`);
+    }
+  }
+
+  if (!res.writableEnded) res.end();
 });
 
 // Health check endpoint

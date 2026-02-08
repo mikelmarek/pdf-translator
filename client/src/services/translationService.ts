@@ -5,9 +5,12 @@ export interface TranslationEvent {
   isDone: boolean;
 }
 
+export type SummarizeTask = 'notes' | 'final';
+
 export class TranslationService {
   private static instance: TranslationService;
   private currentEventSource: EventSource | null = null;
+  private currentAbortController: AbortController | null = null;
 
   static getInstance(): TranslationService {
     if (!TranslationService.instance) {
@@ -28,6 +31,9 @@ export class TranslationService {
     // Cancel any existing stream
     this.cancelCurrentStream();
 
+    const abortController = new AbortController();
+    this.currentAbortController = abortController;
+
     try {
       console.log('🔄 Starting translation request...', { targetLanguage, textLength: pageText.length });
 
@@ -39,6 +45,7 @@ export class TranslationService {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        signal: abortController.signal,
         body: JSON.stringify({ pageText, targetLanguage, force }),
       });
 
@@ -106,8 +113,99 @@ export class TranslationService {
         reader.releaseLock();
       }
     } catch (error) {
+      if (error && typeof error === 'object' && 'name' in error && (error as any).name === 'AbortError') {
+        return;
+      }
       console.error('❌ Translation stream error:', error);
       onError?.(error instanceof Error ? error : new Error('Translation failed'));
+    } finally {
+      if (this.currentAbortController === abortController) {
+        this.currentAbortController = null;
+      }
+    }
+  }
+
+  // Start streaming summarization with SSE
+  async summarizeWithStream(
+    text: string,
+    outputLanguage: string,
+    task: SummarizeTask,
+    onData: (event: TranslationEvent) => void,
+    onError?: (error: Error) => void,
+    onComplete?: () => void,
+    pageNumber?: number
+  ): Promise<void> {
+    // Cancel any existing stream
+    this.cancelCurrentStream();
+
+    const abortController = new AbortController();
+    this.currentAbortController = abortController;
+
+    try {
+      const token = localStorage.getItem('pdf-translator-token');
+      const response = await fetch('/api/summarize-stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({ text, outputLanguage, task, pageNumber }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Response body is not readable');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.trim() === '') continue;
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6).trim();
+              if (!data) continue;
+              try {
+                const event: TranslationEvent = JSON.parse(data);
+                onData(event);
+                if (event.isDone) {
+                  onComplete?.();
+                  return;
+                }
+              } catch {
+                // ignore parse errors
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch (error) {
+      if (error && typeof error === 'object' && 'name' in error && (error as any).name === 'AbortError') {
+        return;
+      }
+      onError?.(error instanceof Error ? error : new Error('Summarization failed'));
+    } finally {
+      if (this.currentAbortController === abortController) {
+        this.currentAbortController = null;
+      }
     }
   }
 
@@ -116,6 +214,15 @@ export class TranslationService {
     if (this.currentEventSource) {
       this.currentEventSource.close();
       this.currentEventSource = null;
+    }
+
+    if (this.currentAbortController) {
+      try {
+        this.currentAbortController.abort();
+      } catch {
+        // ignore
+      }
+      this.currentAbortController = null;
     }
   }
 
@@ -137,6 +244,34 @@ export class TranslationService {
         (err) => reject(err),
         undefined,
         force
+      );
+    });
+  }
+
+  // Convenience helper: returns the full summary as a single string.
+  async summarizeToString(
+    text: string,
+    outputLanguage: string,
+    task: SummarizeTask,
+    pageNumber?: number
+  ): Promise<string> {
+    let acc = '';
+    return new Promise<string>((resolve, reject) => {
+      void this.summarizeWithStream(
+        text,
+        outputLanguage,
+        task,
+        (event) => {
+          if (event.error) {
+            reject(new Error(event.error));
+            return;
+          }
+          if (event.content) acc += event.content;
+          if (event.isDone) resolve(acc);
+        },
+        (err) => reject(err),
+        undefined,
+        pageNumber
       );
     });
   }
