@@ -24,7 +24,7 @@ function App() {
 
   // Check authentication on load
   useEffect(() => {
-    const token = localStorage.getItem('pdf-translator-token');
+    const token = sessionStorage.getItem('pdf-translator-token');
     if (!token) {
       setIsAuthenticated(false);
       return;
@@ -32,15 +32,15 @@ function App() {
 
     (async () => {
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: { Authorization: `Bearer ${token}` },
+        const res = await fetch('/pdf-translator/app/api/auth/me', {
+          headers: { 'X-PDF-Session': token },
         });
         if (!res.ok) throw new Error('Not authenticated');
         const data = await res.json();
         setUsername(data.username || '');
         setIsAuthenticated(true);
       } catch {
-        localStorage.removeItem('pdf-translator-token');
+        sessionStorage.removeItem('pdf-translator-token');
         setUsername('');
         setIsAuthenticated(false);
       }
@@ -49,23 +49,23 @@ function App() {
 
   // Handle login
   const handleLogin = (token: string, loggedInUsername: string) => {
-    localStorage.setItem('pdf-translator-token', token);
+    sessionStorage.setItem('pdf-translator-token', token);
     setUsername(loggedInUsername);
     setIsAuthenticated(true);
   };
 
   // Handle logout
   const handleLogout = () => {
-    const token = localStorage.getItem('pdf-translator-token');
+    const token = sessionStorage.getItem('pdf-translator-token');
     if (token) {
-      fetch('/api/auth/logout', {
+      fetch('/pdf-translator/app/api/auth/logout', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 'X-PDF-Session': token },
       }).catch(() => {
         // ignore
       });
     }
-    localStorage.removeItem('pdf-translator-token');
+    sessionStorage.removeItem('pdf-translator-token');
     setUsername('');
     setIsAuthenticated(false);
   };

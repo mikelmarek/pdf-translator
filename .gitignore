@@ -47,3 +47,5 @@ README_PRIVATE.md
 
 # Documents (do not commit)
 *.pdf
+# Local agent state (no document or session data in git)
+state/

@@ -35,24 +35,22 @@ export class TranslationService {
     this.currentAbortController = abortController;
 
     try {
-      console.log('🔄 Starting translation request...', { targetLanguage, textLength: pageText.length });
 
       // Send the translation request to backend
-      const token = localStorage.getItem('pdf-translator-token');
-      const response = await fetch('/api/translate-stream', {
+      const token = sessionStorage.getItem('pdf-translator-token');
+      const response = await fetch('/pdf-translator/app/api/translate-stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(token ? { 'X-PDF-Session': token } : {}),
         },
         signal: abortController.signal,
         body: JSON.stringify({ pageText, targetLanguage, force }),
       });
 
-      console.log('📡 Response received:', response.status, response.statusText);
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const details = await response.json().catch(() => ({})); throw new Error(details.error || `HTTP ${response.status}`);
       }
 
       // Check if response has body
@@ -64,16 +62,12 @@ export class TranslationService {
       const decoder = new TextDecoder();
       let buffer = '';
       
-      console.log('🎯 Starting to read SSE stream...');
       
       try {
         while (true) {
           const { done, value } = await reader.read();
           
-          if (done) {
-            console.log('✅ SSE stream completed');
-            break;
-          }
+          if (done) { throw new Error('Spojení skončilo bez potvrzeného výsledku.'); }
           
           // Decode chunk and add to buffer
           const chunk = decoder.decode(value, { stream: true });
@@ -86,24 +80,20 @@ export class TranslationService {
           for (const line of lines) {
             if (line.trim() === '') continue;
             
-            console.log('📦 Processing line:', line);
             
             if (line.startsWith('data: ')) {
               const data = line.slice(6).trim();
               if (data) {
                 try {
                   const event: TranslationEvent = JSON.parse(data);
-                  console.log('🎉 Parsed event:', event);
                   
                   onData(event);
                   
                   if (event.isDone) {
-                    console.log('✨ Translation completed');
                     onComplete?.();
                     return;
                   }
                 } catch (parseError) {
-                  console.warn('⚠️ Failed to parse SSE data:', data, parseError);
                 }
               }
             }
@@ -114,6 +104,7 @@ export class TranslationService {
       }
     } catch (error) {
       if (error && typeof error === 'object' && 'name' in error && (error as any).name === 'AbortError') {
+        onError?.(new Error('Zpracování bylo zrušeno.'));
         return;
       }
       console.error('❌ Translation stream error:', error);
@@ -143,19 +134,19 @@ export class TranslationService {
     this.currentAbortController = abortController;
 
     try {
-      const token = localStorage.getItem('pdf-translator-token');
-      const response = await fetch('/api/summarize-stream', {
+      const token = sessionStorage.getItem('pdf-translator-token');
+      const response = await fetch('/pdf-translator/app/api/summarize-stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(token ? { 'X-PDF-Session': token } : {}),
         },
         signal: abortController.signal,
         body: JSON.stringify({ text, outputLanguage, task, pageNumber, userInstructions }),
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const details = await response.json().catch(() => ({})); throw new Error(details.error || `HTTP ${response.status}`);
       }
 
       const reader = response.body?.getReader();
@@ -169,7 +160,7 @@ export class TranslationService {
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) throw new Error('Spojení skončilo bez potvrzeného výsledku.');
 
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
@@ -200,6 +191,7 @@ export class TranslationService {
       }
     } catch (error) {
       if (error && typeof error === 'object' && 'name' in error && (error as any).name === 'AbortError') {
+        onError?.(new Error('Zpracování bylo zrušeno.'));
         return;
       }
       onError?.(error instanceof Error ? error : new Error('Summarization failed'));
@@ -282,7 +274,7 @@ export class TranslationService {
   // Check backend health
   async checkHealth(): Promise<boolean> {
     try {
-      const response = await fetch('/api/health');
+      const response = await fetch('/pdf-translator/app/api/health');
       return response.ok;
     } catch {
       return false;
@@ -292,7 +284,7 @@ export class TranslationService {
   // Get cache status from backend
   async getCacheStatus(): Promise<{ cacheSize: number; timestamp: string } | null> {
     try {
-      const response = await fetch('/api/cache-status');
+      const response = await fetch('/pdf-translator/app/api/cache-status');
       if (response.ok) {
         return await response.json();
       }
@@ -305,7 +297,7 @@ export class TranslationService {
   // Clear backend cache
   async clearCache(): Promise<boolean> {
     try {
-      const response = await fetch('/api/cache', { method: 'DELETE' });
+      const response = await fetch('/pdf-translator/app/api/cache/clear', { method: 'POST', headers: { 'X-PDF-Session': sessionStorage.getItem('pdf-translator-token') || '' } });
       return response.ok;
     } catch {
       return false;
