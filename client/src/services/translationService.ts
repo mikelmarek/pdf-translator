@@ -1,3 +1,4 @@
+import { translationInput, mergeTranslation, plainText } from '../documentLayout';
 // Service for handling SSE translation streaming
 export interface TranslationEvent {
   content?: string;
@@ -45,7 +46,7 @@ export class TranslationService {
           ...(token ? { 'X-PDF-Session': token } : {}),
         },
         signal: abortController.signal,
-        body: JSON.stringify({ pageText, targetLanguage, force }),
+        body: JSON.stringify({ pageText: translationInput(pageText), targetLanguage, force }),
       });
 
 
@@ -61,6 +62,7 @@ export class TranslationService {
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let translated = '';
       
       
       try {
@@ -87,9 +89,11 @@ export class TranslationService {
                 try {
                   const event: TranslationEvent = JSON.parse(data);
                   
-                  onData(event);
-                  
+                  if (event.content) translated += event.content;
+                  if (event.error) { onData(event); onComplete?.(); return; }
                   if (event.isDone) {
+                    try { onData({content: mergeTranslation(pageText, translated), isDone:true}); }
+                    catch (error) { onError?.(error instanceof Error ? error : new Error('Neplatná struktura překladu.')); return; }
                     onComplete?.();
                     return;
                   }
@@ -142,7 +146,7 @@ export class TranslationService {
           ...(token ? { 'X-PDF-Session': token } : {}),
         },
         signal: abortController.signal,
-        body: JSON.stringify({ text, outputLanguage, task, pageNumber, userInstructions }),
+        body: JSON.stringify({ text: plainText(text), outputLanguage, task, pageNumber, userInstructions }),
       });
 
       if (!response.ok) {

@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import type { PDFReadState } from './PDFViewer';
+import { documentHtml, documentCss } from '../documentLayout';
 import { TranslationService, TranslationEvent } from '../services/translationService';
 
 interface TranslationPanelProps {
+  pdfStatus: PDFReadState;
+  onBusyChange: (busy: boolean) => void;
   pageText: string;
   currentPage: number;
   totalPages: number;
@@ -11,7 +15,7 @@ interface TranslationPanelProps {
 }
 
 export const TranslationPanel: React.FC<TranslationPanelProps> = ({
-  pageText,
+  pageText, pdfStatus, onBusyChange,
   currentPage,
   totalPages,
   targetLanguage,
@@ -38,6 +42,14 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const rangePrintWindowRef = useRef<Window | null>(null);
   const stopRequestedRef = useRef<boolean>(false);
   const translationService = TranslationService.getInstance();
+
+  // Během požadavku držíme zvolený dokument a stránku; lze nejdřív použít Zastavit.
+  useEffect(() => { onBusyChange(isTranslating || isSummarizing); }, [isTranslating, isSummarizing, onBusyChange]);
+  // Výsledek předchozí stránky nesmí vypadat jako překlad nově otevřené stránky.
+  useEffect(() => {
+    setTranslatedText(''); setSummaryText(''); setError(''); setSummaryError('');
+    setLastTranslatedPage(0);
+  }, [currentPage, pageText]);
 
   // Cleanup any previous blob URL when replaced/unmounted
   useEffect(() => {
@@ -81,13 +93,12 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     { code: 'italian', label: 'Italiano' },
     { code: 'portuguese', label: 'Português' },
     { code: 'russian', label: 'Русский' },
-    { code: 'chinese', label: '中文' },
     { code: 'japanese', label: '日本語' },
   ];
 
   // Start translation with streaming
   const startTranslation = async (force: boolean = false) => {
-    if (!pageText.trim() || isTranslating || isSummarizing) return;
+    if (pdfStatus !== 'ready' || !pageText.trim() || isTranslating || isSummarizing) return;
 
     console.log('🔄 Starting translation for page', currentPage, 'with', pageText.length, 'characters', force ? '(FORCED)' : '');
 
@@ -100,7 +111,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
     // Handle streaming translation events
     const handleTranslationData = (event: TranslationEvent) => {
-      console.log('📦 Received translation event:', event);
+      // Obsah dokumentu ani překladu nepatří do konzolových logů.
       
       if (event.error) {
         setError(event.error);
@@ -153,9 +164,9 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   };
 
   const summarizeCurrentPage = async () => {
-    if (!pageText.trim() || isTranslating || isSummarizing) return;
+    if (pdfStatus !== 'ready' || !pageText.trim() || isTranslating || isSummarizing) return;
 
-    const outputLanguage = languages.find((l) => l.code === targetLanguage)?.label ?? targetLanguage;
+    const outputLanguage = targetLanguage;
 
     setActiveRightTab('summary');
     setIsSummarizing(true);
@@ -212,7 +223,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const summarizeRange = async () => {
     if (isTranslating || isSummarizing || !totalPages) return;
 
-    const outputLanguage = languages.find((l) => l.code === targetLanguage)?.label ?? targetLanguage;
+    const outputLanguage = targetLanguage;
 
     const from = Math.max(1, Math.min(totalPages, Math.min(rangeFrom, rangeTo)));
     const to = Math.max(1, Math.min(totalPages, Math.max(rangeFrom, rangeTo)));
@@ -347,30 +358,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   const saveTranslation = () => {
     if (!translatedText) return;
 
-    // Use the same reflow logic as display
-    const prettyText = reflowTranslatedText(translatedText);
-    
-    // Convert text to properly formatted HTML
-    const formatTextAsHTML = (text: string) => {
-      return text.split('\n').map((line) => {
-        const trimmedLine = line.trim();
-        
-        // Identify line type (same logic as display)
-        const isBullet = trimmedLine.startsWith('•');
-        const isNumberedBullet = /^\d+\.\s/.test(trimmedLine);
-        const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine);
-        const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine);
-        
-        // Generate HTML with appropriate classes
-        if (!trimmedLine) return '<div class="empty-line">&nbsp;</div>';
-        if (isBullet || isNumberedBullet) return `<div class="bullet-line">${line}</div>`;
-        if (isMainHeading) return `<div class="heading-line">${line}</div>`;
-        if (isSubHeading) return `<div class="sub-heading-line">${line}</div>`;
-        return `<div class="text-line">${line}</div>`;
-      }).join('\n');
-    };
-
-    const formattedContent = formatTextAsHTML(prettyText);
+    const formattedContent = documentHtml(translatedText);
 
     // Create HTML for better formatting and print to PDF
     const htmlContent = `
@@ -380,6 +368,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     <meta charset="UTF-8">
     <title>Překlad stránky ${currentPage}</title>
     <style>
+${documentCss}
         @media print {
             body { margin: 0; }
             .no-print { display: none; }
@@ -482,87 +471,11 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
     onLanguageChange(event.target.value);
   };
 
-  const reflowTranslatedText = (text: string) => {
-    // Normalize inline bullet markers that often come in the middle of a sentence.
-    // Example: "... způsobem: ● K2: ... ● K3: ..." -> split into separate bullet lines.
-    const normalized = text.replace(/\s*●\s*/g, '\n• ');
-
-    const rawLines = normalized
-      .replace(/\r/g, '')
-      .split('\n')
-      .map(l => l.trimEnd()); // necháme leading spaces řešit přes CSS třídami
-
-    const out: string[] = [];
-    let buffer = '';
-
-    const flush = () => {
-      if (buffer.trim()) out.push(buffer.trim());
-      buffer = '';
-    };
-
-    const isMainHeading = (l: string) => /^\d+\s+\S/.test(l) && !/^\d+\.\s/.test(l);      // "0 Úvod"
-    const isSubHeading  = (l: string) => /^\d+\.\d+(\.\d+)?\s+\S/.test(l);               // "0.1 ..."
-    const isBulletDot   = (l: string) => l.trim().startsWith('•');
-    const isBulletNum   = (l: string) => /^\d+\.\s+\S/.test(l);                          // "1. ..."
-    const isPageMeta    = (l: string) => /Strana\s+\d+\s+z\s+\d+/i.test(l) || /\d{4}-\d{2}-\d{2}/.test(l);
-
-    // řádky, které musí zůstat samostatně
-    const mustStayAlone = (l: string) =>
-      !l.trim() ||
-      isMainHeading(l) ||
-      isSubHeading(l) ||
-      isBulletDot(l) ||
-      isBulletNum(l) ||
-      isPageMeta(l);
-
-    for (const line of rawLines) {
-      const l = line.trim();
-
-      if (mustStayAlone(l)) {
-        flush();
-        // prázdný řádek zachovej jako separator
-        out.push(l);
-        continue;
-      }
-
-      // jinak: je to normální text => připoj do bufferu
-      if (!buffer) buffer = l;
-      else buffer += ' ' + l;
-    }
-
-    flush();
-
-    // zredukuj vícenásobné prázdné řádky
-    return out
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-  };
-
+  // Jednotný renderer zaručuje stejné bloky a odsazení na obrazovce i při tisku.
   const buildRangeExportHtml = (pages: Array<{ pageNumber: number; translatedText: string }>) => {
-    const formatTextAsHTML = (text: string) => {
-      const prettyText = reflowTranslatedText(text);
-      return prettyText
-        .split('\n')
-        .map((line) => {
-          const trimmedLine = line.trim();
-          const isBullet = trimmedLine.startsWith('•');
-          const isNumberedBullet = /^\d+\.\s/.test(trimmedLine);
-          const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine);
-          const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine);
-
-          if (!trimmedLine) return '<div class="empty-line">&nbsp;</div>';
-          if (isBullet || isNumberedBullet) return `<div class="bullet-line">${line}</div>`;
-          if (isMainHeading) return `<div class="heading-line">${line}</div>`;
-          if (isSubHeading) return `<div class="sub-heading-line">${line}</div>`;
-          return `<div class="text-line">${line}</div>`;
-        })
-        .join('\n');
-    };
-
     const pagesHtml = pages
       .map((p, idx) => {
-        const content = formatTextAsHTML(p.translatedText);
+        const content = documentHtml(p.translatedText);
         const pageBreakClass = idx === 0 ? 'page' : 'page page-break';
         return `
 <div class="${pageBreakClass}">
@@ -584,6 +497,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
   <meta charset="UTF-8">
   <title>Překlad PDF (strany ${pages[0]?.pageNumber ?? ''}–${pages[pages.length - 1]?.pageNumber ?? ''})</title>
   <style>
+${documentCss}
     @media print {
       body { margin: 0; }
       .no-print { display: none; }
@@ -794,10 +708,12 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
           ))}
         </select>
         <button 
+          className="translate-primary"
           onClick={() => startTranslation(true)}
-          disabled={!pageText || isTranslating || isSummarizing}
+          disabled={pdfStatus !== 'ready' || !pageText.trim() || isTranslating || isSummarizing}
         >
-          {isTranslating ? 'Překládá se...' : 'Přeložit'}
+          {isTranslating ? 'Překládá se…' : `Přeložit stránku ${currentPage}`}
+
         </button>
 
         {(isTranslating || isSummarizing || bulkStatus) && (
@@ -808,7 +724,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
         
         <button 
           onClick={saveTranslation}
-          disabled={!translatedText || isSummarizing}
+          disabled={!translatedText || isTranslating || isSummarizing}
           className="save-button"
         >
           💾 Uložit
@@ -886,7 +802,7 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
                 <span style={{ color: '#666', fontSize: '0.9rem' }}>AI sumarizace (shrnutí / povinnosti / rizika / TODO)</span>
                 <button
                   onClick={summarizeCurrentPage}
-                  disabled={!pageText || isTranslating || isSummarizing}
+                  disabled={pdfStatus !== 'ready' || !pageText.trim() || isTranslating || isSummarizing}
                   className="range-pdf-button"
                   title="Vytvoří AI sumarizaci aktuální stránky"
                 >
@@ -928,17 +844,19 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
             type="button"
             className={`right-tab-button ${activeRightTab === 'translation' ? 'active' : ''}`}
             onClick={() => setActiveRightTab('translation')}
+            role="tab"
             aria-selected={activeRightTab === 'translation'}
           >
-            Překlad
+            Výsledek překladu
           </button>
           <button
             type="button"
             className={`right-tab-button ${activeRightTab === 'summary' ? 'active' : ''}`}
             onClick={() => setActiveRightTab('summary')}
+            role="tab"
             aria-selected={activeRightTab === 'summary'}
           >
-            Sumarizace
+            Výsledek shrnutí
           </button>
         </div>
 
@@ -952,65 +870,28 @@ export const TranslationPanel: React.FC<TranslationPanelProps> = ({
             )}
 
             {error && (
-              <div className="translation-error">
+              <div className="translation-error" role="alert">
                 {error}
               </div>
             )}
 
             {isTranslating && !translatedText && (
               <div className="translation-loading">
-                Spouští se překlad...
+                Překládám stránku {currentPage} přes Codex. Výsledek se zobrazí po dokončení, může to trvat několik minut.
               </div>
             )}
 
             {translatedText && (
-              <div className="translation-content">
-                {(() => {
-                  const prettyText = reflowTranslatedText(translatedText);
-                  return prettyText.split('\n').map((line, i, allLines) => {
-                    const trimmedLine = line.trim();
-
-                    // Identify line type
-                    const isBullet = trimmedLine.startsWith('•');
-                    const isNumberedBullet = /^\d+\.\s/.test(trimmedLine); // 1. 2. 3. jsou také odrážky
-                    const isMainHeading = /^\d+\s/.test(trimmedLine) && !/^\d+\.\s/.test(trimmedLine); // 0 Úvod (bez tečky)
-                    const isSubHeading = /^\d+\.\d+(\.\d+)?\s/.test(trimmedLine); // 0.1, 0.2.1 apod.
-
-                    // Check if previous line was a bullet and this continues it (simplified)
-                    const isPreviousBullet = i > 0 && (
-                      /^\d+\.\s/.test(allLines[i - 1].trim()) ||
-                      allLines[i - 1].trim().startsWith('•')
-                    );
-
-                    const isContinuation =
-                      isPreviousBullet &&
-                      trimmedLine.length > 0 &&
-                      !isBullet &&
-                      !isNumberedBullet &&
-                      !isMainHeading &&
-                      !isSubHeading;
-
-                    // Determine CSS class
-                    let className = 'text-line';
-                    if (isBullet || isNumberedBullet) className = 'bullet-line';
-                    else if (isContinuation) className = 'bullet-continuation';
-                    else if (isSubHeading) className = 'sub-heading-line';
-                    else if (isMainHeading) className = 'heading-line';
-
-                    return (
-                      <div key={i} className={className}>
-                        {line || '\u00A0'} {/* Non-breaking space for empty lines */}
-                      </div>
-                    );
-                  });
-                })()}
-                {isTranslating && <span style={{ animation: 'blink 1s infinite' }}>▋</span>}
-              </div>
+              <div className="translation-content" dangerouslySetInnerHTML={{__html: documentHtml(translatedText)}} />
             )}
 
-            {!pageText && !isTranslating && !error && (
-              <div className="translation-loading">
-                Vyberte PDF soubor a stránku pro překlad.
+            {!isTranslating && !translatedText && !error && (
+              <div className="translation-loading" role="status">
+                {pdfStatus === 'loading' ? 'Načítám text vybrané stránky…' :
+                 pdfStatus === 'error' ? 'PDF se nepodařilo načíst. Podrobnosti najdeš u dokumentu vlevo nebo nad tímto panelem.' :
+                 pdfStatus === 'empty' ? 'Vyber PDF a poté klikni na Přeložit stránku.' :
+                 !pageText.trim() ? 'Tato stránka neobsahuje čitelný text. Zkus jinou stránku; pro naskenované PDF je nejprve potřeba OCR.' :
+                 `Stránka ${currentPage} je připravená. Překlad spustíš tlačítkem Přeložit stránku ${currentPage} nahoře.`}
               </div>
             )}
           </>

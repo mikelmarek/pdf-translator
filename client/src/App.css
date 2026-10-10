@@ -441,3 +441,35 @@ body {
   animation: blink 1s infinite;
   color: #007bff;
 }
+
+/* Ovládání překladu musí zůstat dostupné i na úzké obrazovce. */
+.panel-header {flex-wrap:wrap;height:auto;min-height:70px;gap:10px;flex-shrink:0}
+.panel-header button {min-height:44px;white-space:nowrap}
+.panel-header .translate-primary {background:#1859c9;font-weight:700}
+.pdf-status {padding:8px 16px;color:#456078}
+.right-tabs {flex-wrap:wrap}
+.right-tab-button {min-height:44px}
+@media(max-width:900px){
+  body,.app {height:auto;min-height:100vh}
+  .app-header {height:auto;min-height:70px;padding:12px;gap:12px;flex-wrap:wrap}
+  .app-content {flex-direction:column;padding:8px}
+  .pdf-panel,.translation-panel {flex:none;width:100%}
+  .pdf-panel .panel-content {height:50vh;min-height:280px;flex:none;text-align:center}
+  .translation-panel .panel-content {min-height:250px}
+  .panel-header {padding:12px}
+  .panel-header h3 {flex-basis:100%}
+  .translation-content {overflow-wrap:anywhere}
+}
+
+/* Kompaktní nástroje, čitelný dokument; na dotykovém zařízení zůstává zásahová plocha. */
+.app-header{height:56px;padding:8px 18px}.app-header h1{font-size:20px}
+.panel-header{min-height:54px;padding:8px 12px;gap:8px}
+.panel-header h3{font-size:15px}.panel-header button,.logout-button,.language-select,.right-tab-button{font-size:13px;min-height:34px;padding:6px 10px}
+.panel-header .advanced-toggle-button{width:34px;font-size:16px}
+.right-tabs{margin-bottom:16px}.right-tab-button{font-weight:600;border-radius:7px}
+.translation-content{padding:18px;background:white;border:1px solid #e1e9f0;border-radius:3px;line-height:1.45;hyphens:none}
+.document-layout{font:14px/1.45 Arial,sans-serif;color:#20252b;text-align:left;overflow-wrap:break-word}
+.document-block{break-inside:avoid;white-space:pre-wrap}.document-text{min-width:0}.document-marker{flex:0 0 1em;text-align:center}
+.document-layout .document-block:first-child{margin-top:0!important}
+@media(pointer:coarse){.panel-header button,.logout-button,.language-select,.right-tab-button{min-height:44px}.panel-header .advanced-toggle-button{width:44px}}
+@media(max-width:900px){.panel-header h3{flex-basis:100%}.translation-content{padding:12px}.app-header{height:auto;min-height:56px}}

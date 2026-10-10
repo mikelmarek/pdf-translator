@@ -4,7 +4,7 @@ import { TranslationPanel } from './components/TranslationPanel';
 import { Login } from './components/Login';
 import './App.css';
 
-import type { PDFViewerHandle } from './components/PDFViewer';
+import type { PDFViewerHandle, PDFReadState } from './components/PDFViewer';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -13,6 +13,9 @@ function App() {
   const [totalPages, setTotalPages] = useState<number>(0);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [, setUsername] = useState<string>('');
+
+  const [pdfStatus, setPdfStatus] = useState<PDFReadState>('empty');
+  const [workBusy, setWorkBusy] = useState(false);
 
   const pdfViewerRef = useRef<PDFViewerHandle | null>(null);
 
@@ -106,6 +109,8 @@ function App() {
         <div className="pdf-panel">
           <PDFViewer 
             ref={pdfViewerRef}
+            onStatusChange={setPdfStatus}
+            busy={workBusy}
             currentPage={currentPage}
             onPageChange={handlePageChange}
             onPageCountChange={handlePageCountChange}
@@ -115,6 +120,8 @@ function App() {
         <div className="translation-panel">
           <TranslationPanel 
             pageText={pageText}
+            pdfStatus={pdfStatus}
+            onBusyChange={setWorkBusy}
             currentPage={currentPage}
             totalPages={totalPages}
             targetLanguage={targetLanguage}

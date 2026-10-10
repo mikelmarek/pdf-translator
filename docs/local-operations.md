@@ -1,9 +1,26 @@
-# Lokální režim v Markově systému
+# Provoz a limity
 
-Původní server src/index.ts a Vercel konfigurace zůstávají zdrojem starého API prototypu. Nový režim spouštějte pouze přes server/dist/local.js, po sestavení serveru a klienta. Původní npm start serveru nepoužívá nový agentní režim.
+Aplikaci spouští scripts/pdf-translator/start.sh v Runtime, tmux session pdf-translator-local. Běží na 127.0.0.1:4190, přes dashboard pouze pod /pdf-translator/app/. Původní Vercel deployment nebyl změněný ani přepublikovaný.
 
-Integraci vlastní marek-agent-runtime, scripts/pdf-translator/start.sh. Konfigurace PDF_PROXY_SECRET_FILE a PDF_STATE_DIR se předává prostředím, tajemství a state nejsou součástí repozitáře. Server naslouchá pouze na loopbacku a vyžaduje proxy tajemství i pro statické soubory. Samostatný Vite dev server nemá soukromou gateway integraci.
+Instalační tajemství proxy je v Runtime state/pdf-translator/proxy.secret s právy 0600, mimo Git. Serverové souhrnné počty jsou v projektu state/local/usage.json. Dokumenty, modelové odpovědi a relace se do Git ani běžných logů neukládají.
 
-Instalace zachovává npm package-lock.json. Build: npm run build. Lokální start po konfiguraci: npm run start:local. Kompletní aktuální dokumentace a milníky jsou na soukromém dashboardu /pdf-translator/.
+## Spotřeba
 
-Ověřeno sestavení a jeden skutečný Codex překlad syntetické věty. Izolovaný test v Runtime tests/pdf-translator/http-smoke.py používá falešný model. Celý PDF export, mobilní UX, OCR a veřejné víceuživatelské nasazení nejsou tímto ověřené.
+Lokální režim nevolá placené GPT API. Čerpá limit osobního Codex účtu, takže nejde o neomezený nebo beznákladový provoz. Má dodatečný limit 60 modelových pokusů za den. Počty nejsou odhad ceny předplatného ani vyúčtování tokenů.
+
+## Při chybě
+
+Regresní browser kontrola: `tests/pdf-translator/browser-smoke.cjs` v Runtime. Standardní režim používá skutečný PDF.js a lokální přihlášení, ale nahrazuje modelové streamy; `--live` výslovně spotřebuje jeden modelový překlad titulní stránky sylabu. Ověření 7. 10. 2026: oba režimy PASS, desktop i simulovaný mobil bez přetečení a chyby souběžného renderu. Po sestavení frontendových souborů stačí obnovit stránku čtečky; restart backendu pro změnu klienta není nutný.
+
+Pokud není účet připojený, přihlásit Codex oficiální cestou na Macu. Při limitu počkat na jeho obnovení. Při nepřítomnosti služby ověřit pouze její tmux session a konkrétní loopback port; nerestartovat ostatní agenty. Restart ztratí cache i relace, proto nepřerušovat běžící překlad bez důvodu. Po restartu znovu otevřít čtečku.
+
+## Rozsah ochrany
+
+Vnitřní dostupnost Velínu je oprávnění vlastníka, ne ověřená identita veřejného zákazníka. Nikomu neposílat jeho přístup ani adresu jako zákaznickou pozvánku. Instalační tajemství odděluje proxy od backendu, ale samo nezajišťuje izolaci celého Macu. Pro více uživatelů je nutná další etapa podle Architektury.
+
+
+## Ověření struktury · 7. 10. 2026
+
+`tests/pdf-translator/layout-contract.cjs` kontroluje vnoření, pokračování odrážek, zachování spojovníků, párování identifikátorů, odmítnutí neúplného výsledku a bezpečnost HTML/CSS exportu. `structure-smoke.cjs` ověřuje skutečnou stránku 14 sylabu CT-AI v1.0: 31 bloků, 7 hlavních a 13 vnořených odrážek, shodu tiskového náhledu, chybu při chybějícím bloku a desktop/mobil bez přetečení. Volba `--live` spotřebuje jeden skutečný překlad této stránky; 7. 10. prošla i tato kontrola. Screenshoty byly prohlédnuty. Původní browser smoke (neplatné PDF, prázdná stránka, přerušený stream, relace a sumarizace) také prošel.
+
+PDF CTAL-TAE/65 stran z Markova screenshotu nebylo mezi místními podklady; ověření použilo dostupný 99stránkový CT-AI s obdobnými seznamy. Přesná sazba obrázků/tabulek/sloupců ani fyzický iPhone nejsou ověřenou funkcí. Backend byl jednou cíleně obnoven až po `busy=false`, stejným příkazem v tmux `pdf-translator-local`; health následně OK, lease odstraněna. Vercel verze překladače zůstala beze změny.

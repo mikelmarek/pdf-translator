@@ -1,10 +1,15 @@
 import React, { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import { extractLayout } from '../documentLayout';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.js', import.meta.url).href;
 
+export type PDFReadState = 'empty' | 'loading' | 'ready' | 'error';
+
 interface PDFViewerProps {
+  onStatusChange?: (state: PDFReadState) => void;
+  busy?: boolean;
   onPageChange: (pageNumber: number, pageText: string) => void;
   currentPage: number;
   onPageCountChange?: (totalPages: number) => void;
@@ -17,178 +22,102 @@ export interface PDFViewerHandle {
 export const PDFViewer = forwardRef<PDFViewerHandle, PDFViewerProps>(({ 
   onPageChange, 
   currentPage,
-  onPageCountChange 
+  onPageCountChange, onStatusChange, busy = false
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [totalPages, setTotalPages] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isRendering, setIsRendering] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null);
+  const renderVersionRef = useRef(0);
+  const loadVersionRef = useRef(0);
 
-  // Load PDF file
+  // Načte nový dokument. Vykreslení má jediného vlastníka v efektu níže.
   const loadPDF = async (file: File) => {
+    const version = ++loadVersionRef.current;
+    ++renderVersionRef.current;
+    renderTaskRef.current?.cancel();
     setIsLoading(true);
+    setLoadError('');
+    onStatusChange?.('loading');
+    setPdfDocument(null);
+    setTotalPages(0);
+    onPageCountChange?.(0);
+    onPageChange(1, '');
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false }).promise;
-      
+      const pdf = await pdfjsLib.getDocument({data: arrayBuffer, isEvalSupported: false}).promise;
+      if (version !== loadVersionRef.current) { await pdf.destroy(); return; }
       setPdfDocument(pdf);
       setTotalPages(pdf.numPages);
       onPageCountChange?.(pdf.numPages);
-      
-      // Load first page by default
-      await renderPage(pdf, 1);
-    } catch (error) {
-      console.error('Error loading PDF:', error);
+    } catch {
+      if (version === loadVersionRef.current) {
+        setLoadError('PDF se nepodařilo načíst. Zkontroluj, zda není poškozené nebo chráněné heslem, a vyber soubor znovu.');
+        onStatusChange?.('error');
+      }
     } finally {
-      setIsLoading(false);
+      if (version === loadVersionRef.current) setIsLoading(false);
     }
   };
 
-  // Clean page text (fallback textual filters for edge cases)
-  const cleanPageText = (rawText: string): string => {
-    const lines = rawText.split('\n');
-
-    const cleaned = lines.filter(line => {
-      const l = line.trim();
-
-      // prázdné řádky nech
-      if (!l) return true;
-
-      // FALLBACK textové filtry pro extrémní případy
-      // (většinu už vyřeší geometrické filtrování)
-      
-      // Copyright - všude může být problematické
-      if (/©/.test(l)) return false;
-      
-      // Stránkování + verze + datum (backup filtry)
-      if (/Strana\s+\d+\s+z\s+\d+/i.test(l)) return false;
-      if (/v\d+\.\d+\s+Strana/i.test(l)) return false;
-      if (/\d{4}-\d{2}-\d{2}/.test(l)) return false;
-
-      return true;
-    });
-
-    return cleaned.join('\n');
-  };
-
-  // Normalize text by removing trademark symbols and extra spaces
-  const normalizeText = (text: string): string =>
-    text
-      .replace(/[®©]/g, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-
+  // Textové bloky i jejich vzhled odvozujeme ze zdrojového PDF, ne z překladu.
   const extractPageText = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumber: number): Promise<string> => {
     const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-
-    // Get page dimensions for geometric header/footer detection
-    const baseViewport = page.getViewport({ scale: 1 });
-    const pageHeight = baseViewport.height;
-
-    // Define header/footer zones (percentages of page height)
-    const headerZone = pageHeight * 0.10; // 10% nahoře
-    const footerZone = pageHeight * 0.08; // 8% dole
-    const skipHeaderFooter = pageNumber > 1; // Skip only from 2nd page onwards
-
-    type AnyItem = any;
-    const items = textContent.items as AnyItem[];
-
-    const lines: string[] = [];
-    let currentLine = '';
-    let lastY: number | null = null;
-
-    // tolerance for "same line" (pdf.js coords can be floaty)
-    const sameLineTolerance = 2;
-
-    for (const it of items) {
-      if (!it || typeof it.str !== 'string') continue;
-
-      const y = Array.isArray(it.transform) ? it.transform[5] : null;
-
-      // Geometric header/footer detection
-      if (typeof y === 'number' && skipHeaderFooter) {
-        // y=0 bývá dole, y=height nahoře (PDF coords)
-        const isHeader = y > (pageHeight - headerZone);
-        const isFooter = y < footerZone;
-
-        // Optional: only skip small text in header/footer zones
-        const fontSizeApprox = Math.abs(it.transform?.[0] ?? 0);
-        const isSmallText = fontSizeApprox < 14;
-
-        if ((isHeader || isFooter) && isSmallText) continue; // 🔥 vyhodit hlavičku/patičku
-      }
-
-      // If y changes enough => new line
-      if (lastY !== null && typeof y === 'number' && Math.abs(y - lastY) > sameLineTolerance) {
-        if (currentLine.trim()) lines.push(currentLine.trim());
-        currentLine = '';
-      }
-
-      // Append token
-      currentLine += it.str;
-
-      // Add a space if token doesn't end with punctuation/hyphen (optional)
-      currentLine += ' ';
-
-      // Some pdf.js versions provide hasEOL -> enforce line break
-      if (it.hasEOL) {
-        if (currentLine.trim()) lines.push(currentLine.trim());
-        currentLine = '';
-        lastY = null;
-        continue;
-      }
-
-      if (typeof y === 'number') lastY = y;
+    const content = await page.getTextContent();
+    await page.getOperatorList();
+    const styles = {...content.styles};
+    for (const item of content.items as any[]) {
+      if (!item.fontName) continue;
+      try {
+        const font = page.commonObjs.get(item.fontName);
+        styles[item.fontName] = {...styles[item.fontName], fontFamily: font?.name || styles[item.fontName]?.fontFamily};
+      } catch { /* Neznámý font zachováme s obecnou rodinou z PDF.js. */ }
     }
-
-    if (currentLine.trim()) lines.push(currentLine.trim());
-
-    // Final: keep newlines (do NOT normalize to one line)
-    const pageText = lines
-      .map(l => l.replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-      .join('\n');
-
-    return normalizeText(cleanPageText(pageText));
+    return extractLayout(content.items, styles, page.getViewport({scale:1}));
   };
 
-  // Render specific page
+  // Zruší starší render a předá text pouze z poslední požadované stránky.
   const renderPage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumber: number) => {
+    const version = ++renderVersionRef.current;
+    const previous = renderTaskRef.current;
+    previous?.cancel();
+    setIsRendering(true);
+    setLoadError('');
+    onStatusChange?.('loading');
     try {
+      if (previous) await previous.promise.catch(() => undefined);
       const page = await pdf.getPage(pageNumber);
+      if (version !== renderVersionRef.current) return;
       const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const context = canvas.getContext('2d');
-      if (!context) return;
-
-      // Calculate scale to fit canvas
-      const viewport = page.getViewport({ scale: 1 });
+      const context = canvas?.getContext('2d');
+      if (!canvas || !context) throw new Error('Canvas unavailable');
+      const viewport = page.getViewport({scale: 1});
       const scale = Math.min(
         (canvas.parentElement?.clientWidth || 800) / viewport.width,
         (canvas.parentElement?.clientHeight || 600) / viewport.height
-      ) * 0.9; // 90% to leave some margin
-
-      const scaledViewport = page.getViewport({ scale });
-
-      // Set canvas dimensions
+      ) * 0.9;
+      const scaledViewport = page.getViewport({scale});
       canvas.height = scaledViewport.height;
       canvas.width = scaledViewport.width;
-
-      // Render page
-      await page.render({
-        canvasContext: context,
-        viewport: scaledViewport,
-      }).promise;
-
-      const cleanedText = await extractPageText(pdf, pageNumber);
-
-      // Notify parent component about page change
-      onPageChange(pageNumber, cleanedText);
-    } catch (error) {
-      console.error('Error rendering page:', error);
+      const task = page.render({canvasContext: context, viewport: scaledViewport});
+      renderTaskRef.current = task;
+      await task.promise;
+      const text = await extractPageText(pdf, pageNumber);
+      if (version !== renderVersionRef.current) return;
+      onPageChange(pageNumber, text);
+      onStatusChange?.('ready');
+    } catch {
+      if (version === renderVersionRef.current) {
+        setLoadError('Stránku se nepodařilo načíst. Zkus jinou stránku nebo vyber PDF znovu.');
+        onPageChange(pageNumber, '');
+        onStatusChange?.('error');
+      }
+    } finally {
+      if (version === renderVersionRef.current) setIsRendering(false);
     }
   };
 
@@ -205,27 +134,29 @@ export const PDFViewer = forwardRef<PDFViewerHandle, PDFViewerProps>(({
     },
   }), [pdfDocument, totalPages]);
 
-  // Handle file selection
+  // Opakovaný výběr stejného souboru je také nový pokus o načtení.
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && file.type === 'application/pdf') {
-      loadPDF(file);
+    event.target.value = '';
+    if (file) void loadPDF(file);
+  };
+
+  // Navigace mění požadovanou stránku; render se spustí jen jednou v efektu.
+  const goToPage = (pageNumber: number) => {
+    if (pdfDocument && pageNumber >= 1 && pageNumber <= totalPages && !busy) {
+      onPageChange(pageNumber, '');
     }
   };
 
-  // Handle page navigation
-  const goToPage = async (pageNumber: number) => {
-    if (pdfDocument && pageNumber >= 1 && pageNumber <= totalPages) {
-      await renderPage(pdfDocument, pageNumber);
-    }
-  };
-
-  // Effect to handle current page changes from parent
   useEffect(() => {
-    if (pdfDocument && currentPage !== 0) {
-      goToPage(currentPage);
+    if (pdfDocument && currentPage >= 1 && currentPage <= pdfDocument.numPages) {
+      void renderPage(pdfDocument, currentPage);
     }
+    return () => { ++renderVersionRef.current; renderTaskRef.current?.cancel(); };
   }, [currentPage, pdfDocument]);
+
+  useEffect(() => () => { void pdfDocument?.destroy(); }, [pdfDocument]);
+  useEffect(() => () => { ++loadVersionRef.current; }, []);
 
   const handlePreviousPage = () => {
     if (currentPage > 1) {
@@ -251,7 +182,7 @@ export const PDFViewer = forwardRef<PDFViewerHandle, PDFViewerProps>(({
         />
         <button 
           onClick={() => fileInputRef.current?.click()}
-          disabled={isLoading}
+          disabled={isLoading || isRendering || busy}
         >
           {isLoading ? 'Načítání...' : 'Vybrat PDF'}
         </button>
@@ -260,7 +191,7 @@ export const PDFViewer = forwardRef<PDFViewerHandle, PDFViewerProps>(({
           <>
             <button 
               onClick={handlePreviousPage} 
-              disabled={currentPage <= 1}
+              disabled={currentPage <= 1 || isLoading || isRendering || busy}
             >
               ← Předchozí
             </button>
@@ -269,7 +200,7 @@ export const PDFViewer = forwardRef<PDFViewerHandle, PDFViewerProps>(({
             </span>
             <button 
               onClick={handleNextPage} 
-              disabled={currentPage >= totalPages}
+              disabled={currentPage >= totalPages || isLoading || isRendering || busy}
             >
               Další →
             </button>
@@ -277,6 +208,8 @@ export const PDFViewer = forwardRef<PDFViewerHandle, PDFViewerProps>(({
         )}
       </div>
       
+      {loadError && <p className="translation-error" role="alert">{loadError}</p>}
+      {(isLoading || isRendering) && <p className="pdf-status" role="status">Načítám PDF a text stránky…</p>}
       <div className="panel-content">
         <canvas 
           ref={canvasRef}
